@@ -192,6 +192,7 @@ std::vector<uint32_t> preprocessSpirv(
 		opt.RegisterPass(spvtools::CreateSetSpecConstantDefaultValuePass(specializations));
 	}
 
+#if 0
 	// Full optimization list taken from spirv-opt.
 	opt.RegisterPass(spvtools::CreateWrapOpKillPass())
 		.RegisterPass(spvtools::CreateDeadBranchElimPass())
@@ -227,6 +228,7 @@ std::vector<uint32_t> preprocessSpirv(
 		.RegisterPass(spvtools::CreateDeadBranchElimPass())
 		.RegisterPass(spvtools::CreateBlockMergePass())
 		.RegisterPass(spvtools::CreateSimplificationPass());
+#endif
 
 	std::vector<uint32_t> optimized;
 	opt.Run(code.data(), code.size(), &optimized);

@@ -1,0 +1,35 @@
+{
+    "name": "gpd",
+    "displayName": "Graphics Debug Protocol",
+    "description": "Graphics Debug Protocol.",
+    "version": "1.0.0",
+    "preview": false,
+    "publisher": "Google LLC",
+    "readme": "README.md",
+    "icon": "icon.png",
+    "author": {
+        "name": "Google LLC"
+    },
+    "license": "SEE LICENSE IN LICENSE.txt",
+    "engines": {
+        "vscode": "^1.32.0"
+    },
+    "categories": [
+        "Debuggers"
+    ],
+    "contributes": {
+        "debuggers": [
+            {
+                "type": "gdp",
+                "program": "./std-socket-pipe",
+                "label": "Graphics Debugger",
+                "configurationAttributes": {}
+            }
+        ],
+        "breakpoints": [
+            {
+                "language": "spv"
+            }
+        ]
+    }
+}

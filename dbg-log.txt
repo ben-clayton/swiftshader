@@ -1,0 +1,15 @@
+2019/10/09 17:37:30 Connecting to ':9020'
+2019/10/09 17:37:30 Unable to connect to ':9020': dial tcp :9020: connect: connection refused
+2019/10/09 17:37:31 Unable to connect to ':9020': dial tcp :9020: connect: connection refused
+2019/10/09 17:37:32 Unable to connect to ':9020': dial tcp :9020: connect: connection refused
+2019/10/09 17:37:33 Unable to connect to ':9020': dial tcp :9020: connect: connection refused
+2019/10/09 17:37:34 Unable to connect to ':9020': dial tcp :9020: connect: connection refused
+2019/10/09 17:37:35 Unable to connect to ':9020': dial tcp :9020: connect: connection refused
+2019/10/09 17:37:36 Piping stdin and stdout to/from ':9020'
+2019/10/09 17:37:36 IDE Content-Length: 310
+
+{"command":"initialize","arguments":{"clientID":"vscode","clientName":"Visual Studio Code","adapterID":"gdp","pathFormat":"path","linesStartAt1":true,"columnsStartAt1":true,"supportsVariableType":true,"supportsVariablePaging":true,"supportsRunInTerminalRequest":true,"locale":"en-gb"},"type":"request","seq":1}
+2019/10/09 17:39:16 DGB 
+2019/10/09 17:39:16 IDE Content-Length: 79
+
+{"command":"disconnect","arguments":{"restart":false},"type":"request","seq":2}

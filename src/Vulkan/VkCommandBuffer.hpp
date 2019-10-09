@@ -15,6 +15,7 @@
 #ifndef VK_COMMAND_BUFFER_HPP_
 #define VK_COMMAND_BUFFER_HPP_
 
+#include "DebugServer.hpp"
 #include "VkConfig.h"
 #include "VkObject.hpp"
 #include "VkDescriptorSet.hpp"
@@ -197,6 +198,8 @@ private:
 
 	// FIXME (b/119409619): replace this vector by an allocator so we can control all memory allocations
 	std::vector<std::unique_ptr<Command>>* commands;
+
+	std::shared_ptr<vk::dbg::File> file;
 };
 
 using DispatchableCommandBuffer = DispatchableObject<CommandBuffer, VkCommandBuffer>;

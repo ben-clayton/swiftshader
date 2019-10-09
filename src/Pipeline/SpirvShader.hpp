@@ -26,6 +26,8 @@
 #include "Device/Config.hpp"
 #include "Device/Sampler.hpp"
 
+#include "Vulkan/DebugServer.hpp"
+
 #include <spirv/unified1/spirv.hpp>
 
 #include <array>
@@ -626,6 +628,9 @@ namespace sw
 			inline operator Object::ID() const { return Object::ID(value()); }
 		};
 
+		using String = std::string;
+		using StringID = SpirvID<String>;
+
 		// OpImageSample variants
 		enum Variant
 		{
@@ -897,6 +902,10 @@ namespace sw
 		std::unordered_map<spv::BuiltIn, BuiltinMapping, BuiltInHash> outputBuiltins;
 		WorkgroupMemory workgroupMemory;
 
+		std::unordered_map<const void*, int> spirvLineMappings;
+		std::shared_ptr<vk::dbg::File> spirvFile;
+		std::unordered_map<String, std::shared_ptr<vk::dbg::File>> files;
+
 	private:
 		const uint32_t codeSerialID;
 		Modes modes = {};
@@ -904,6 +913,8 @@ namespace sw
 		HandleMap<Type> types;
 		HandleMap<Object> defs;
 		HandleMap<Function> functions;
+		std::unordered_map<StringID, String> strings;
+		std::unordered_map<Object::ID, String> names;
 		Function::ID entryPoint;
 
 		const bool robustBufferAccess = true;
@@ -967,7 +978,7 @@ namespace sw
 		//
 		static bool IsStorageInterleavedByLane(spv::StorageClass storageClass);
 		static bool IsExplicitLayout(spv::StorageClass storageClass);
-	
+
 		// Output storage buffers and images should not be affected by helper invocations
 		static bool StoresInHelperInvocation(spv::StorageClass storageClass);
 
@@ -1021,10 +1032,7 @@ namespace sw
 				return RValue<SIMD::Int>(storesAndAtomicsMaskValue);
 			}
 
-			void setActiveLaneMask(RValue<SIMD::Int> mask)
-			{
-				activeLaneMaskValue = mask.value;
-			}
+			void setActiveLaneMask(RValue<SIMD::Int> mask);
 
 			// Add a new active lane mask edge from the current block to out.
 			// The edge mask value will be (mask AND activeLaneMaskValue).
@@ -1164,6 +1172,13 @@ namespace sw
 			return it->second;
 		}
 
+		String const &getString(StringID id) const
+		{
+			auto it = strings.find(id);
+			ASSERT_MSG(it != strings.end(), "Unknown string %d", id.value());
+			return it->second;
+		}
+
 		// Returns a SIMD::Pointer to the underlying data for the given pointer
 		// object.
 		// Handles objects of the following kinds:
@@ -1297,6 +1312,13 @@ namespace sw
 
 		// Returns 0 when invalid.
 		static VkShaderStageFlagBits executionModelToStage(spv::ExecutionModel model);
+
+		void dbgLine(String file, uint32_t line, uint32_t column, EmitState *state) const;
+		void dbgExposeIntermediate(Object::ID id, EmitState *state) const;
+
+		template<typename Key>
+		void dbgExposeVariable(const Key& key, Object::ID id, EmitState *state) const;
+
 	};
 
 	class SpirvRoutine
@@ -1328,6 +1350,21 @@ namespace sw
 		Int killMask = Int{0};
 		SIMD::Int windowSpacePosition[2];
 		Int viewID;	// slice offset into input attachments for multiview, even if the shader doesn't use ViewIndex
+
+		std::array<SIMD::Float, 4> fragCoord;
+		std::array<SIMD::Float, 4> pointCoord;
+		Int4 helperInvocation;
+
+		Int4 numWorkgroups;
+		Int4 workgroupID;
+		Int4 workgroupSize;
+		Int subgroupsPerWorkgroup;
+		Int invocationsPerSubgroup;
+		Int subgroupIndex;
+		SIMD::Int localInvocationIndex;
+		std::array<SIMD::Int, 3> localInvocationID;
+		std::array<SIMD::Int, 3> globalInvocationID;
+		Pointer<Byte> debugContext;
 
 		void createVariable(SpirvShader::Object::ID id, uint32_t size)
 		{

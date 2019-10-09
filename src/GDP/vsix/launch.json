@@ -1,0 +1,5 @@
+{
+  "type": "Graphics Debug Protocol",
+  "request": "launch",
+  "program": "abc"
+}

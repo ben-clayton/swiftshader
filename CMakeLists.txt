@@ -276,6 +276,7 @@ set(LIBBACKTRACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libbacktrace/src)
 set(LIBBACKTRACE_CONFIG_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libbacktrace/config)
 set(LIBBACKTRACE_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libbacktrace/src)
 set(MARL_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/marl/include)
+set(JSON_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json/include)
 set(SUBZERO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/subzero)
 set(SUBZERO_LLVM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llvm-subzero)
 set(TESTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
@@ -342,7 +343,11 @@ if(MSVC)
         "/we4838" # conversion from 'type_1' to 'type_2' requires a narrowing conversion
         "/we5038" # data member 'member1' will be initialized after data member 'member2' data member 'member' will be initialized after base class 'base_class'
     )
-
+	
+    # Other
+    list(APPEND SWIFTSHADER_COMPILE_OPTIONS
+        "/bigobj" # number of sections exceeded object file format limit: compile with /bigobj
+    )
 else()
     set_cpp_flag("--std=c++11")
     set_cpp_flag("-fno-exceptions")
@@ -1600,6 +1605,7 @@ set(OPENGL_INCLUDE_DIR
 set(VULKAN_INCLUDE_DIR
     ${COMMON_INCLUDE_DIR}
     ${MARL_INCLUDE_DIR}
+    ${JSON_INCLUDE_DIR}
 )
 
 ###########################################################
@@ -1864,6 +1870,26 @@ elseif(APPLE)
 endif()
 
 ###########################################################
+# Graphics Debug Protocol
+###########################################################
+file(GLOB_RECURSE GDP_LIST
+    ${SOURCE_DIR}/GDP/*.cpp
+    ${SOURCE_DIR}/GDP/*.h
+    ${SOURCE_DIR}/GDP/*.hpp
+    ${SOURCE_DIR}/GDP/dap/*.cpp
+    ${SOURCE_DIR}/GDP/dap/*.h
+    ${SOURCE_DIR}/GDP/dap/*.hpp
+)
+add_library(gdp STATIC ${GDP_LIST})
+set_target_properties(gdp PROPERTIES
+    INCLUDE_DIRECTORIES "${JSON_INCLUDE_DIR}"
+    POSITION_INDEPENDENT_CODE 1
+    COMPILE_OPTIONS "${SWIFTSHADER_COMPILE_OPTIONS}"
+    COMPILE_DEFINITIONS "NO_SANITIZE_FUNCTION=;"
+)
+target_link_libraries(gdp ${OS_LIBS})
+
+###########################################################
 # SwiftShader Targets
 ###########################################################
 
@@ -2054,7 +2080,7 @@ if(BUILD_VULKAN)
     endif()
 
     set_shared_library_export_map(vk_swiftshader ${SOURCE_DIR}/Vulkan)
-    target_link_libraries(vk_swiftshader ${Reactor} marl ${OS_LIBS} SPIRV-Tools SPIRV-Tools-opt)
+    target_link_libraries(vk_swiftshader ${Reactor} marl gdp ${OS_LIBS} SPIRV-Tools SPIRV-Tools-opt)
     add_custom_command(
         TARGET vk_swiftshader
         POST_BUILD

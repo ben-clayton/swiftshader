@@ -13,7 +13,8 @@
                 "${workspaceFolder}/third_party/SPIRV-Headers/include",
                 "${workspaceFolder}/third_party/llvm-7.0/llvm/include",
                 "${workspaceFolder}/third_party/llvm-7.0/configs/common/include",
-                "${workspaceFolder}/third_party/llvm-7.0/configs/linux/include"
+                "${workspaceFolder}/third_party/llvm-7.0/configs/linux/include",
+                "${workspaceFolder}/third_party/json/include"
             ],
             "cStandard": "c11",
             "cppStandard": "c++11"
@@ -31,7 +32,8 @@
                 "${workspaceFolder}/third_party/SPIRV-Headers/include",
                 "${workspaceFolder}/third_party/llvm-7.0/llvm/include",
                 "${workspaceFolder}/third_party/llvm-7.0/configs/common/include",
-                "${workspaceFolder}/third_party/llvm-7.0/configs/darwin/include"
+                "${workspaceFolder}/third_party/llvm-7.0/configs/darwin/include",
+                "${workspaceFolder}/third_party/json/include"
             ],
             "cStandard": "c11",
             "cppStandard": "c++11"

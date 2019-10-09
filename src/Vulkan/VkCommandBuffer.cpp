@@ -25,6 +25,8 @@
 #include "VkRenderPass.hpp"
 #include "Device/Renderer.hpp"
 
+#include "marl/defer.h"
+
 #include <cstring>
 
 namespace vk
@@ -35,11 +37,13 @@ class CommandBuffer::Command
 public:
 	// FIXME (b/119421344): change the commandBuffer argument to a CommandBuffer state
 	virtual void play(CommandBuffer::ExecutionState& executionState) = 0;
+	virtual std::string description() = 0;
 	virtual ~Command() {}
 };
 
 class BeginRenderPass : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdBeginRenderPass()"; }
 public:
 	BeginRenderPass(RenderPass* renderPass, Framebuffer* framebuffer, VkRect2D renderArea,
 	                uint32_t clearValueCount, const VkClearValue* pClearValues) :
@@ -75,6 +79,7 @@ private:
 
 class NextSubpass : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdNextSubpass()"; }
 public:
 	NextSubpass()
 	{
@@ -99,6 +104,7 @@ protected:
 
 class EndRenderPass : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdEndRenderPass()"; }
 public:
 	EndRenderPass()
 	{
@@ -122,6 +128,7 @@ protected:
 
 class ExecuteCommands : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdExecuteCommands()"; }
 public:
 	ExecuteCommands(const CommandBuffer* commandBuffer) : commandBuffer(commandBuffer)
 	{
@@ -139,6 +146,7 @@ private:
 
 class PipelineBind : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdPipelineBind()"; }
 public:
 	PipelineBind(VkPipelineBindPoint pipelineBindPoint, Pipeline* pipeline) :
 		pipelineBindPoint(pipelineBindPoint), pipeline(pipeline)
@@ -158,6 +166,7 @@ private:
 
 class Dispatch : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdDispatch()"; }
 public:
 	Dispatch(uint32_t baseGroupX, uint32_t baseGroupY, uint32_t baseGroupZ, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) :
 			baseGroupX(baseGroupX), baseGroupY(baseGroupY), baseGroupZ(baseGroupZ),
@@ -189,6 +198,7 @@ private:
 
 class DispatchIndirect : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdDispatchIndirect()"; }
 public:
 	DispatchIndirect(Buffer* buffer, VkDeviceSize offset) :
 			buffer(buffer), offset(offset)
@@ -216,6 +226,7 @@ private:
 
 struct VertexBufferBind : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdVertexBufferBind()"; }
 	VertexBufferBind(uint32_t binding, Buffer* buffer, const VkDeviceSize offset) :
 		binding(binding), buffer(buffer), offset(offset)
 	{
@@ -234,6 +245,7 @@ private:
 
 struct IndexBufferBind : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdIndexBufferBind()"; }
 	IndexBufferBind(Buffer* buffer, const VkDeviceSize offset, const VkIndexType indexType) :
 		buffer(buffer), offset(offset), indexType(indexType)
 	{
@@ -254,6 +266,7 @@ private:
 
 struct SetViewport : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdSetViewport()"; }
 	SetViewport(const VkViewport& viewport, uint32_t viewportID) :
 		viewport(viewport), viewportID(viewportID)
 	{
@@ -271,6 +284,7 @@ private:
 
 struct SetScissor : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdSetScissor()"; }
 	SetScissor(const VkRect2D& scissor, uint32_t scissorID) :
 		scissor(scissor), scissorID(scissorID)
 	{
@@ -288,6 +302,7 @@ private:
 
 struct SetDepthBias : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdSetDepthBias()"; }
 	SetDepthBias(float depthBiasConstantFactor, float depthBiasClamp, float depthBiasSlopeFactor) :
 		depthBiasConstantFactor(depthBiasConstantFactor), depthBiasClamp(depthBiasClamp), depthBiasSlopeFactor(depthBiasSlopeFactor)
 	{
@@ -308,6 +323,7 @@ private:
 
 struct SetBlendConstants : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdSetBlendConstants()"; }
 	SetBlendConstants(const float blendConstants[4])
 	{
 		memcpy(this->blendConstants, blendConstants, sizeof(this->blendConstants));
@@ -324,6 +340,7 @@ private:
 
 struct SetDepthBounds : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdSetDepthBounds()"; }
 	SetDepthBounds(float minDepthBounds, float maxDepthBounds) :
 		minDepthBounds(minDepthBounds), maxDepthBounds(maxDepthBounds)
 	{
@@ -341,6 +358,7 @@ private:
 };
 struct SetStencilCompareMask : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdSetStencilCompareMask()"; }
 	SetStencilCompareMask(VkStencilFaceFlags faceMask, uint32_t compareMask) :
 		faceMask(faceMask), compareMask(compareMask)
 	{
@@ -365,6 +383,7 @@ private:
 
 struct SetStencilWriteMask : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdSetStencilWriteMask()"; }
 	SetStencilWriteMask(VkStencilFaceFlags faceMask, uint32_t writeMask) :
 		faceMask(faceMask), writeMask(writeMask)
 	{
@@ -389,6 +408,7 @@ private:
 
 struct SetStencilReference : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdSetStencilReference()"; }
 	SetStencilReference(VkStencilFaceFlags faceMask, uint32_t reference) :
 		faceMask(faceMask), reference(reference)
 	{
@@ -465,6 +485,7 @@ void CommandBuffer::ExecutionState::bindAttachments(sw::Context& context)
 
 struct DrawBase : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdDrawBase()"; }
 	int bytesPerIndex(CommandBuffer::ExecutionState const& executionState)
 	{
 		return executionState.indexType == VK_INDEX_TYPE_UINT16 ? 2 : 4;
@@ -713,6 +734,7 @@ private:
 
 struct ImageToImageCopy : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdImageToImageCopy()"; }
 	ImageToImageCopy(const Image* srcImage, Image* dstImage, const VkImageCopy& region) :
 		srcImage(srcImage), dstImage(dstImage), region(region)
 	{
@@ -731,6 +753,7 @@ private:
 
 struct BufferToBufferCopy : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdBufferToBufferCopy()"; }
 	BufferToBufferCopy(const Buffer* srcBuffer, Buffer* dstBuffer, const VkBufferCopy& region) :
 		srcBuffer(srcBuffer), dstBuffer(dstBuffer), region(region)
 	{
@@ -749,6 +772,7 @@ private:
 
 struct ImageToBufferCopy : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdImageToBufferCopy()"; }
 	ImageToBufferCopy(Image* srcImage, Buffer* dstBuffer, const VkBufferImageCopy& region) :
 		srcImage(srcImage), dstBuffer(dstBuffer), region(region)
 	{
@@ -767,6 +791,7 @@ private:
 
 struct BufferToImageCopy : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdBufferToImageCopy()"; }
 	BufferToImageCopy(Buffer* srcBuffer, Image* dstImage, const VkBufferImageCopy& region) :
 		srcBuffer(srcBuffer), dstImage(dstImage), region(region)
 	{
@@ -785,6 +810,7 @@ private:
 
 struct FillBuffer : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdFillBuffer()"; }
 	FillBuffer(Buffer* dstBuffer, VkDeviceSize dstOffset, VkDeviceSize size, uint32_t data) :
 		dstBuffer(dstBuffer), dstOffset(dstOffset), size(size), data(data)
 	{
@@ -804,6 +830,7 @@ private:
 
 struct UpdateBuffer : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdUpdateBuffer()"; }
 	UpdateBuffer(Buffer* dstBuffer, VkDeviceSize dstOffset, VkDeviceSize dataSize, const uint8_t* pData) :
 		dstBuffer(dstBuffer), dstOffset(dstOffset), data(pData, &pData[dataSize])
 	{
@@ -822,6 +849,7 @@ private:
 
 struct ClearColorImage : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdClearColorImage()"; }
 	ClearColorImage(Image* image, const VkClearColorValue& color, const VkImageSubresourceRange& range) :
 		image(image), color(color), range(range)
 	{
@@ -840,6 +868,7 @@ private:
 
 struct ClearDepthStencilImage : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdClearDepthStencilImage()"; }
 	ClearDepthStencilImage(Image* image, const VkClearDepthStencilValue& depthStencil, const VkImageSubresourceRange& range) :
 		image(image), depthStencil(depthStencil), range(range)
 	{
@@ -858,6 +887,7 @@ private:
 
 struct ClearAttachment : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdClearAttachment()"; }
 	ClearAttachment(const VkClearAttachment& attachment, const VkClearRect& rect) :
 		attachment(attachment), rect(rect)
 	{
@@ -879,6 +909,7 @@ private:
 
 struct BlitImage : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdBlitImage()"; }
 	BlitImage(const Image* srcImage, Image* dstImage, const VkImageBlit& region, VkFilter filter) :
 		srcImage(srcImage), dstImage(dstImage), region(region), filter(filter)
 	{
@@ -898,6 +929,7 @@ private:
 
 struct ResolveImage : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdResolveImage()"; }
 	ResolveImage(const Image* srcImage, Image* dstImage, const VkImageResolve& region) :
 		srcImage(srcImage), dstImage(dstImage), region(region)
 	{
@@ -916,6 +948,7 @@ private:
 
 struct PipelineBarrier : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdPipelineBarrier()"; }
 	PipelineBarrier()
 	{
 	}
@@ -937,6 +970,7 @@ private:
 
 struct SignalEvent : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdSignalEvent()"; }
 	SignalEvent(Event* ev, VkPipelineStageFlags stageMask) : ev(ev), stageMask(stageMask)
 	{
 	}
@@ -954,6 +988,7 @@ private:
 
 struct ResetEvent : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdResetEvent()"; }
 	ResetEvent(Event* ev, VkPipelineStageFlags stageMask) : ev(ev), stageMask(stageMask)
 	{
 	}
@@ -970,6 +1005,7 @@ private:
 
 struct WaitEvent : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdWaitEvent()"; }
 	WaitEvent(Event* ev) : ev(ev)
 	{
 	}
@@ -986,6 +1022,7 @@ private:
 
 struct BindDescriptorSet : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdBindDescriptorSet()"; }
 	BindDescriptorSet(VkPipelineBindPoint pipelineBindPoint, const PipelineLayout *pipelineLayout, uint32_t set, DescriptorSet* descriptorSet,
 		uint32_t dynamicOffsetCount, uint32_t const *dynamicOffsets)
 		: pipelineBindPoint(pipelineBindPoint), pipelineLayout(pipelineLayout), set(set), descriptorSet(descriptorSet),
@@ -997,7 +1034,7 @@ struct BindDescriptorSet : public CommandBuffer::Command
 		}
 	}
 
-	void play(CommandBuffer::ExecutionState& executionState)
+	void play(CommandBuffer::ExecutionState& executionState) override
 	{
 		ASSERT_OR_RETURN((pipelineBindPoint < VK_PIPELINE_BIND_POINT_RANGE_SIZE) && (set < MAX_BOUND_DESCRIPTOR_SETS));
 		auto &pipelineState = executionState.pipelineState[pipelineBindPoint];
@@ -1022,6 +1059,7 @@ private:
 
 struct SetPushConstants : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdSetPushConstants()"; }
 	SetPushConstants(uint32_t offset, uint32_t size, void const *pValues)
 		: offset(offset), size(size)
 	{
@@ -1031,7 +1069,7 @@ struct SetPushConstants : public CommandBuffer::Command
 		memcpy(data, pValues, size);
 	}
 
-	void play(CommandBuffer::ExecutionState& executionState)
+	void play(CommandBuffer::ExecutionState& executionState) override
 	{
 		memcpy(&executionState.pushConstants.data[offset], data, size);
 	}
@@ -1044,12 +1082,13 @@ private:
 
 struct BeginQuery : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdBeginQuery()"; }
 	BeginQuery(QueryPool* queryPool, uint32_t query, VkQueryControlFlags flags)
 		: queryPool(queryPool), query(query), flags(flags)
 	{
 	}
 
-	void play(CommandBuffer::ExecutionState& executionState)
+	void play(CommandBuffer::ExecutionState& executionState) override
 	{
 		queryPool->begin(query, flags);
 		executionState.renderer->addQuery(queryPool->getQuery(query));
@@ -1063,12 +1102,13 @@ private:
 
 struct EndQuery : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdEndQuery()"; }
 	EndQuery(QueryPool* queryPool, uint32_t query)
 		: queryPool(queryPool), query(query)
 	{
 	}
 
-	void play(CommandBuffer::ExecutionState& executionState)
+	void play(CommandBuffer::ExecutionState& executionState) override
 	{
 		executionState.renderer->removeQuery(queryPool->getQuery(query));
 		queryPool->end(query);
@@ -1081,12 +1121,13 @@ private:
 
 struct ResetQueryPool : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdResetQueryPool()"; }
 	ResetQueryPool(QueryPool* queryPool, uint32_t firstQuery, uint32_t queryCount)
 		: queryPool(queryPool), firstQuery(firstQuery), queryCount(queryCount)
 	{
 	}
 
-	void play(CommandBuffer::ExecutionState& executionState)
+	void play(CommandBuffer::ExecutionState& executionState) override
 	{
 		queryPool->reset(firstQuery, queryCount);
 	}
@@ -1099,12 +1140,13 @@ private:
 
 struct WriteTimeStamp : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdWriteTimeStamp()"; }
 	WriteTimeStamp(QueryPool* queryPool, uint32_t query, VkPipelineStageFlagBits stage)
 		: queryPool(queryPool), query(query), stage(stage)
 	{
 	}
 
-	void play(CommandBuffer::ExecutionState& executionState)
+	void play(CommandBuffer::ExecutionState& executionState) override
 	{
 		if (stage & ~(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT))
 		{
@@ -1128,6 +1170,7 @@ private:
 
 struct CopyQueryPoolResults : public CommandBuffer::Command
 {
+	public: std::string description() override { return "vkCmdCopyQueryPoolResults()"; }
 	CopyQueryPoolResults(const QueryPool* queryPool, uint32_t firstQuery, uint32_t queryCount,
 		Buffer* dstBuffer, VkDeviceSize dstOffset, VkDeviceSize stride, VkQueryResultFlags flags)
 		: queryPool(queryPool), firstQuery(firstQuery), queryCount(queryCount),
@@ -1135,7 +1178,7 @@ struct CopyQueryPoolResults : public CommandBuffer::Command
 	{
 	}
 
-	void play(CommandBuffer::ExecutionState& executionState)
+	void play(CommandBuffer::ExecutionState& executionState) override
 	{
 		queryPool->getResults(firstQuery, queryCount, dstBuffer->getSize() - dstOffset,
 		                      dstBuffer->getOffsetPointer(dstOffset), stride, flags);
@@ -1197,6 +1240,13 @@ VkResult CommandBuffer::end()
 	ASSERT(state == RECORDING);
 
 	state = EXECUTABLE;
+
+	auto ds = dbg::Server::get();
+	std::string source;
+	for(auto& command : *commands) {
+		source += command->description() + "\n";
+	}
+	file = ds->createVirtualFile("VkCommandBuffer", source.c_str());
 
 	return VK_SUCCESS;
 }
@@ -1614,8 +1664,15 @@ void CommandBuffer::submit(CommandBuffer::ExecutionState& executionState)
 	// Perform recorded work
 	state = PENDING;
 
+	auto dbgThread = dbg::Server::get()->currentThread();
+	dbgThread->setName("vkQueue processor");
+	dbgThread->enter(file, "vkCommandBuffer::submit");
+	defer(dbgThread->exit());
+
+	int line = 1;
 	for(auto& command : *commands)
 	{
+		dbg::Server::get()->currentThread()->update({line++, file});
 		command->play(executionState);
 	}
 
