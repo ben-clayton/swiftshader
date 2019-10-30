@@ -20,6 +20,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+#include <cstring>
 
 namespace vk {
 namespace dbg {
@@ -32,8 +33,8 @@ class File {
   using Id = int;
   inline File(Id id) : id(id) {}
   virtual inline ~File() = default;
-  virtual std::string dir() const = 0;
-  virtual std::string name() const = 0;
+  virtual const char* dir() const = 0;
+  virtual const char* name() const = 0;
   virtual void clearBreakpoints() = 0;
   virtual void addBreakpoint(int line) = 0;
   virtual bool hasBreakpoint(int line) const = 0;
@@ -41,8 +42,8 @@ class File {
 
   std::string path() const {
     auto d = dir();
-    if (d.size() > 0) {
-      return d + "/" + name();
+    if (d != nullptr && strlen(d) > 0) {
+      return std::string(d) + "/" + name();
     } else {
       return name();
     }

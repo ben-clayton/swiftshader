@@ -137,8 +137,8 @@ struct VirtualFile : public vk::dbg::File {
   inline VirtualFile(const int id, const char* name, const char* source)
       : File(id), name_(name), source(source ? source : "") {}
 
-  std::string dir() const override;
-  std::string name() const override;
+  const char* dir() const override;
+  const char* name() const override;
   void clearBreakpoints() override;
   void addBreakpoint(int line) override;
   bool hasBreakpoint(int line) const override;
@@ -151,11 +151,11 @@ struct VirtualFile : public vk::dbg::File {
   std::unordered_set<int> breakpoints;  // guarded by breakpointMutex
 };
 
-std::string VirtualFile::dir() const {
+const char* VirtualFile::dir() const {
   return "";
 }
-std::string VirtualFile::name() const {
-  return name_;
+const char* VirtualFile::name() const {
+  return name_.c_str();
 }
 void VirtualFile::clearBreakpoints() {
   std::unique_lock<std::mutex> lock(breakpointMutex);
@@ -180,18 +180,11 @@ struct PhysicalFile : public VirtualFile {
                       const char* source)
       : VirtualFile(id, name, source), dir_(dir) {}
 
-  std::string dir() const override;
-  bool isVirtual() const override;
+  const char* dir() const override { return dir_.c_str(); }
+  bool isVirtual() const override { return false; }
 
   const std::string dir_;
 };
-
-std::string PhysicalFile::dir() const {
-  return dir_;
-}
-bool PhysicalFile::isVirtual() const {
-  return false;
-}
 
 struct Files {
   using SourceBreakpoints = dap::array<dap::SourceBreakpoint>;
@@ -324,6 +317,7 @@ Server::Impl::Impl() : server(dap::Server::create()) {
         dap::InitializeResponse response;
         response.supportsFunctionBreakpoints = true;
         response.supportsConfigurationDoneRequest = true;
+        response.supportsEvaluateForHovers = true;
         clientIsVisualStudio = (req->clientID.value("") == "visualstudio");
         return response;
       });
@@ -419,7 +413,8 @@ Server::Impl::Impl() : server(dap::Server::create()) {
         dap::StackTraceResponse response;
         response.totalFrames = stack.size();
         response.stackFrames.reserve(stack.size());
-        for (auto const& frame : stack) {
+        for (size_t i = 0; i < stack.size(); i++) {
+          auto frame = stack[stack.size() - i - 1];
           auto const& loc = frame->location;
           dap::StackFrame sf;
           sf.column = 0;
@@ -617,6 +612,14 @@ Server::Impl::Impl() : server(dap::Server::create()) {
           if (frame->locals->variables->find(req->expression, findHandler) ||
               frame->arguments->variables->find(req->expression, findHandler) ||
               frame->registers->variables->find(req->expression, findHandler)) {
+            return response;
+          }
+
+          // HACK for vscode word boundaries not working right.
+          auto spirvId = "%" + req->expression;
+          if (frame->locals->variables->find(spirvId, findHandler) ||
+              frame->arguments->variables->find(spirvId, findHandler) ||
+              frame->registers->variables->find(spirvId, findHandler)) {
             return response;
           }
         }
@@ -893,8 +896,8 @@ void Thread::update(const Location& location) {
       if (!pauseAtFrame || pauseAtFrame == frames.back()) {
         onStep();
         state = State::Paused;
+        pauseAtFrame.reset();
         stateCV.wait(lock, [this] { return state != State::Paused; });
-        pauseAtFrame = 0;
       }
       break;
     }
@@ -925,6 +928,7 @@ void Thread::onFunctionBreakpoint() {
 }
 
 void Thread::enter(const std::shared_ptr<File>& file, const char* function) {
+  printf("Thread::enter()\n");
   auto frame = server->createFrame(file);
   auto isFunctionBreakpoint = server->isFunctionBreakpoint(function);
 
@@ -938,7 +942,11 @@ void Thread::enter(const std::shared_ptr<File>& file, const char* function) {
 }
 
 void Thread::exit() {
+  printf("Thread::exit()\n");
   std::unique_lock<std::mutex> lock(stateMutex);
+  if (pauseAtFrame == frames.back()) {
+    pauseAtFrame.reset();
+  }
   frames.pop_back();
 }
 

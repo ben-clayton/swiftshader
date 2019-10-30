@@ -28,7 +28,7 @@
         ],
         "breakpoints": [
             {
-                "language": "spv"
+                "language": "spirv"
             }
         ]
     }

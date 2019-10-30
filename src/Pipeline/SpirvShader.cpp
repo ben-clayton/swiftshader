@@ -391,15 +391,14 @@ namespace
 		static Ptr create(const sw::SpirvShader* shader, const char* name) { return rr::Call(Ctx::create, rr::ConstantPointer(shader), name); }
 		static void destroy(Ptr ptr) { return rr::Call(Ctx::destroy, ptr); }
 
+		void enter(const char* name) { rr::Call(S::enter, ctx, name); }
+		void exit() { rr::Call(S::exit, ctx); }
 		void update(int line, vk::dbg::File::Id file) { rr::Call(&S::update, ctx, line, file); }
 
 		void updateActiveLaneMask(int lane, rr::Int enabled) { rr::Call(S::updateActiveLaneMask, ctx, lane, enabled); }
 
 		Group registers() { return Group(ctx, rr::Call(&S::registers, ctx)); }
 		Group locals() { return Group(ctx, rr::Call(&S::locals, ctx)); }
-
-		Group registersLane(uint32_t lane) { return Group(ctx, rr::Call(&S::registersLane, ctx, lane)); }
-		Group localsLane(uint32_t lane) { return Group(ctx, rr::Call(&S::localsLane, ctx, lane)); }
 
 	private:
 		Ptr ctx;
@@ -424,7 +423,7 @@ namespace
 			}
 
 			void updateActiveLaneMask(int lane, bool enabled) {
-				registersByLane[lane]->put("enabled", vk::dbg::make_constant(enabled));
+				locals()->put("lane_enabled", vk::dbg::make_constant(enabled));
 			}
 
 			void update(int line, vk::dbg::File::Id file) {
@@ -433,9 +432,6 @@ namespace
 
 			vk::dbg::VariableContainer* registers() { return thread->registers().get(); }
 			vk::dbg::VariableContainer* locals() { return thread->locals().get(); }
-
-			vk::dbg::VariableContainer* registersLane(int i) { return registersByLane[i].get(); }
-			vk::dbg::VariableContainer* localsLane(int i) { return localsByLane[i].get(); }
 
 			template<typename K>
 			vk::dbg::VariableContainer* group(vk::dbg::VariableContainer* vc, K key) {
@@ -463,13 +459,6 @@ namespace
 				, thread(server->currentThread()) {
 
 				enter(stackBase);
-				for (int i = 0; i < sw::SIMD::Width; i++) {
-					auto name = "Lane " + std::to_string(i);
-					registersByLane[i] = server->createVariableContainer();
-					localsByLane[i] = server->createVariableContainer();
-					thread->registers()->put(name.c_str(), registersByLane[i]);
-					thread->locals()->put(name.c_str(), localsByLane[i]);
-				}
 			}
 
 			~Ctx() {
@@ -479,17 +468,15 @@ namespace
 			const sw::SpirvShader* shader;
 			const std::shared_ptr<vk::dbg::Server> server;
 			const std::shared_ptr<vk::dbg::Thread> thread;
-			std::array<std::shared_ptr<vk::dbg::VariableContainer>, sw::SIMD::Width> registersByLane;
-			std::array<std::shared_ptr<vk::dbg::VariableContainer>, sw::SIMD::Width> localsByLane;
 		};
 
 		struct S {
 			static void update(Ctx* ctx, int line, vk::dbg::File::Id file) { ctx->update(line, file); }
 			static void updateActiveLaneMask(Ctx* ctx, int lane, int enabled) { ctx->updateActiveLaneMask(lane, enabled != 0); }
+			static void enter(Ctx* ctx, const char* name) { ctx->enter(name); }
+			static void exit(Ctx* ctx) { ctx->exit(); }
 			static vk::dbg::VariableContainer* registers(Ctx* ctx) { return ctx->registers(); }
 			static vk::dbg::VariableContainer* locals(Ctx* ctx) { return ctx->locals(); }
-			static vk::dbg::VariableContainer* registersLane(Ctx* ctx, uint32_t lane) { return ctx->registersLane(lane); }
-			static vk::dbg::VariableContainer* localsLane(Ctx* ctx, uint32_t lane) { return ctx->localsLane(lane); }
 
 			template<typename K>
 			static vk::dbg::VariableContainer* group(Ctx* ctx, vk::dbg::VariableContainer* vc, K key) {
@@ -2402,7 +2389,10 @@ namespace sw
 	void SpirvShader::dbgLine(String path, uint32_t line, uint32_t column, EmitState *state) const {
 		auto ds = vk::dbg::Server::get();
 		auto file = files.at(path);
-		DC(state->routine->debugContext).update(line, file->id);
+		auto ctx = DC(state->routine->debugContext);
+		//ctx.enter(file->name());
+		ctx.update(line, file->id);
+		//ctx.exit();
 	}
 
 	void SpirvShader::dbgExposeIntermediate(Object::ID id, EmitState *state) const {
@@ -2417,32 +2407,32 @@ namespace sw
 	void SpirvShader::dbgExposeVariable(const Key& key, Object::ID id, EmitState *state) const {
 		auto ctx = DC(state->routine->debugContext);
 		GenericValue val(this, state, id);
-		for (int l = 0; l < SIMD::Width; l++) {
-			auto lane = ctx.localsLane(l);
+		auto locals = ctx.locals();
+		for (int l = 0; l < 1 /*SIMD::Width*/; l++) {
 			switch (getType(val.type).opcode()) {
 			case spv::OpTypeInt:
-				lane.put<Key, int>(key, Extract(val.Int(0), l));
+				locals.put<Key, int>(key, Extract(val.Int(0), l));
 				break;
 			case spv::OpTypeFloat:
-				lane.put<Key, float>(key, Extract(val.Float(0), l));
+				locals.put<Key, float>(key, Extract(val.Float(0), l));
 				break;
 			case spv::OpTypeVector: {
 				auto count = getType(val.type).definition.word(3);
 				switch (count) {
 					case 1:
-						lane.put<Key, float>(key, Extract(val.Float(0), l));
+						locals.put<Key, float>(key, Extract(val.Float(0), l));
 						break;
 					case 2:
-						lane.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l));
+						locals.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l));
 						break;
 					case 3:
-						lane.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l), Extract(val.Float(2), l));
+						locals.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l), Extract(val.Float(2), l));
 						break;
 					case 4:
-						lane.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l), Extract(val.Float(2), l), Extract(val.Float(3), l));
+						locals.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l), Extract(val.Float(2), l), Extract(val.Float(3), l));
 						break;
 					default: {
-						auto vec = lane.group<Key>(key);
+						auto vec = locals.group<Key>(key);
 						for (uint32_t i = 0; i < count; i++) {
 							vec.template put<int, float>(i, Extract(val.Float(i), l));
 						}
@@ -2455,7 +2445,7 @@ namespace sw
 				auto objectTy = getType(getObject(id).type);
 				bool interleavedByLane = IsStorageInterleavedByLane(objectTy.storageClass);
 				auto ptr = state->getPointer(id);
-				auto group = lane.group<Key>(key);
+				auto group = locals.group<Key>(key);
 				VisitMemoryObject(id, [&](uint32_t i, uint32_t offset) {
 					auto p = ptr + offset;
 					if (interleavedByLane) { p = interleaveByLane(p); }  // TODO: Interleave once, then add offset?
@@ -2501,8 +2491,8 @@ namespace sw
 			locals.put<const char*, int>("numSubgroups", routine->subgroupsPerWorkgroup);
 			locals.put<const char*, int>("subgroupIndex", routine->subgroupIndex);
 
-			for (int i = 0; i < SIMD::Width; i++) {
-				auto lane = ctx.localsLane(i);
+			for (int i = 0; i < 1 /*SIMD::Width*/; i++) {
+				auto lane = ctx.locals();
 				lane.put<const char*, int>("globalInvocationId",
 					rr::Extract(routine->globalInvocationID[0], i),
 					rr::Extract(routine->globalInvocationID[1], i),
@@ -2517,8 +2507,8 @@ namespace sw
 
 		case spv::ExecutionModelFragment:
 			locals.put<const char*, int>("viewIndex", routine->viewID);
-			for (int i = 0; i < SIMD::Width; i++) {
-				auto lane = ctx.localsLane(i);
+			for (int i = 0; i < 1 /*SIMD::Width*/; i++) {
+				auto lane = ctx.locals();
 				lane.put<const char*, float>("fragCoord",
 					rr::Extract(routine->fragCoord[0], i),
 					rr::Extract(routine->fragCoord[1], i),
@@ -2838,12 +2828,13 @@ namespace sw
 
 	SpirvShader::EmitResult SpirvShader::EmitInstruction(InsnIterator insn, EmitState *state) const
 	{
+		auto opcode = insn.opcode();
+
 		// >> DEBUGSERVER
 		auto line = spirvLineMappings.at(insn.wordPointer(0));
 		DC(state->routine->debugContext).update(line, spirvFile->id);
 		// << DEBUGSERVER
 
-		auto opcode = insn.opcode();
 
 		switch (opcode)
 		{
