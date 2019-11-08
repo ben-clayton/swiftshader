@@ -20,6 +20,9 @@
 #include "VkDescriptorSet.hpp"
 #include "Device/Color.hpp"
 #include "Device/Context.hpp"
+
+#include "./Debug/Server.hpp"
+
 #include <memory>
 #include <vector>
 
@@ -197,6 +200,8 @@ private:
 
 	// FIXME (b/119409619): replace this vector by an allocator so we can control all memory allocations
 	std::vector<std::unique_ptr<Command>>* commands;
+
+	std::shared_ptr<vk::dbg::File> file;
 };
 
 using DispatchableCommandBuffer = DispatchableObject<CommandBuffer, VkCommandBuffer>;

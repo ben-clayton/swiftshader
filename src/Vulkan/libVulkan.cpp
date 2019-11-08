@@ -42,6 +42,8 @@
 #include "VkShaderModule.hpp"
 #include "VkRenderPass.hpp"
 
+#include "Debug/Server.hpp"
+
 #if defined(VK_USE_PLATFORM_METAL_EXT) || defined(VK_USE_PLATFORM_MACOS_MVK)
 #include "WSI/MetalSurface.h"
 #endif
@@ -150,6 +152,12 @@ std::shared_ptr<marl::Scheduler> getOrCreateScheduler()
 	return scheduler;
 }
 
+std::shared_ptr<vk::dbg::Server> getOrCreateDebugServer()
+{
+	static auto server = vk::dbg::Server::get();
+	return server;
+}
+
 // initializeLibrary() is called by vkCreateInstance() to perform one-off global
 // initialization of the swiftshader driver.
 void initializeLibrary()
@@ -160,6 +168,7 @@ void initializeLibrary()
 #endif  // __ANDROID__ && ENABLE_BUILD_VERSION_OUTPUT
 		setReactorDefaultConfig();
 		setCPUDefaults();
+		getOrCreateDebugServer();
 		return true;
 	}();
 	(void)doOnce;

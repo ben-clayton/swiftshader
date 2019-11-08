@@ -108,6 +108,7 @@ option(REACTOR_VERIFY_LLVM_IR "Check reactor-generated LLVM IR is valid even in 
 option(LESS_DEBUG_INFO "Generate less debug info to reduce file size" 0)
 
 set(BUILD_MARL ${BUILD_VULKAN})
+set(BUILD_CPPDAP ${BUILD_VULKAN})
 
 set(DEFAULT_REACTOR_BACKEND "LLVM")
 
@@ -271,16 +272,20 @@ set(SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(OPENGL_DIR ${SOURCE_DIR}/OpenGL)
 set(OPENGL_COMPILER_DIR ${OPENGL_DIR}/compiler)
 set(VULKAN_DIR ${SOURCE_DIR}/Vulkan)
-set(LLVM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llvm-7.0/llvm)
-set(LLVM_CONFIG_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llvm-7.0/configs)
-set(LIBBACKTRACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libbacktrace/src)
-set(LIBBACKTRACE_CONFIG_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libbacktrace/config)
-set(LIBBACKTRACE_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libbacktrace/src)
-set(MARL_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/marl/include)
-set(SUBZERO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/subzero)
-set(SUBZERO_LLVM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llvm-subzero)
+set(THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+set(LLVM_DIR ${THIRD_PARTY_DIR}/llvm-7.0/llvm)
+set(LLVM_CONFIG_DIR ${THIRD_PARTY_DIR}/llvm-7.0/configs)
+set(LIBBACKTRACE_DIR ${THIRD_PARTY_DIR}/libbacktrace/src)
+set(LIBBACKTRACE_CONFIG_DIR ${THIRD_PARTY_DIR}/libbacktrace/config)
+set(LIBBACKTRACE_INCLUDE_DIR ${THIRD_PARTY_DIR}/libbacktrace/src)
+set(MARL_INCLUDE_DIR ${THIRD_PARTY_DIR}/marl/include)
+set(CPPDAP_DIR ${THIRD_PARTY_DIR}/cppdap)
+set(CPPDAP_INCLUDE_DIR ${CPPDAP_DIR}/include)
+set(JSON_INCLUDE_DIR ${THIRD_PARTY_DIR}/json/include)
+set(SUBZERO_DIR ${THIRD_PARTY_DIR}/subzero)
+set(SUBZERO_LLVM_DIR ${THIRD_PARTY_DIR}/llvm-subzero)
 set(TESTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-set(HELLO2_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/PowerVR_SDK/Examples/Beginner/01_HelloAPI/OGLES2)
+set(HELLO2_DIR ${THIRD_PARTY_DIR}/PowerVR_SDK/Examples/Beginner/01_HelloAPI/OGLES2)
 
 ###########################################################
 # Compile flags
@@ -1609,6 +1614,7 @@ set(OPENGL_INCLUDE_DIR
 set(VULKAN_INCLUDE_DIR
     ${COMMON_INCLUDE_DIR}
     ${MARL_INCLUDE_DIR}
+    ${CPPDAP_INCLUDE_DIR}
 )
 
 ###########################################################
@@ -2025,13 +2031,19 @@ if(BUILD_GLES_CM)
 endif()
 
 if(BUILD_MARL)
+    set(MARL_THIRD_PARTY_DIR ${THIRD_PARTY_DIR})
     add_subdirectory(third_party/marl)
 endif(BUILD_MARL)
+
+if(BUILD_CPPDAP)
+    set(CPPDAP_THIRD_PARTY_DIR ${THIRD_PARTY_DIR})
+    add_subdirectory(${CPPDAP_DIR})
+endif(BUILD_CPPDAP)
 
 if(BUILD_VULKAN)
     if (NOT TARGET SPIRV-Tools)
         # This variable is also used by SPIRV-Tools to locate SPIRV-Headers
-        set(SPIRV-Headers_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/SPIRV-Headers")
+        set(SPIRV-Headers_SOURCE_DIR "${THIRD_PARTY_DIR}/SPIRV-Headers")
         list(APPEND VULKAN_INCLUDE_DIR "${SPIRV-Headers_SOURCE_DIR}/include")
 
         add_subdirectory(third_party/SPIRV-Tools)
@@ -2064,7 +2076,7 @@ if(BUILD_VULKAN)
     endif()
 
     set_shared_library_export_map(vk_swiftshader ${SOURCE_DIR}/Vulkan)
-    target_link_libraries(vk_swiftshader ${Reactor} marl ${OS_LIBS} SPIRV-Tools SPIRV-Tools-opt)
+    target_link_libraries(vk_swiftshader ${Reactor} marl cppdap ${OS_LIBS} SPIRV-Tools SPIRV-Tools-opt)
     add_custom_command(
         TARGET vk_swiftshader
         POST_BUILD
@@ -2134,12 +2146,12 @@ endif()
 if(BUILD_TESTS)
     set(REACTOR_UNIT_TESTS_LIST
         ${SOURCE_DIR}/Reactor/ReactorUnitTests.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/src/gtest-all.cc
+        ${THIRD_PARTY_DIR}/googletest/googletest/src/gtest-all.cc
     )
 
     set(REACTOR_UNIT_TESTS_INCLUDE_DIR
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/
+        ${THIRD_PARTY_DIR}/googletest/googletest/include
+        ${THIRD_PARTY_DIR}/googletest/googletest/
     )
 
     add_executable(ReactorUnitTests ${REACTOR_UNIT_TESTS_LIST})
@@ -2160,13 +2172,13 @@ if(BUILD_TESTS)
     set(GLES_UNITTESTS_LIST
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/GLESUnitTests/main.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/GLESUnitTests/unittests.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/src/gtest-all.cc
+        ${THIRD_PARTY_DIR}/googletest/googletest/src/gtest-all.cc
     )
 
     set(GLES_UNITTESTS_INCLUDE_DIR
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/include/
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googlemock/include/
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/
+        ${THIRD_PARTY_DIR}/googletest/googletest/include/
+        ${THIRD_PARTY_DIR}/googletest/googlemock/include/
+        ${THIRD_PARTY_DIR}/googletest/googletest/
         ${CMAKE_CURRENT_SOURCE_DIR}/include/
     )
 
@@ -2189,13 +2201,13 @@ if(BUILD_TESTS)
     set(MATH_UNITTESTS_LIST
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/MathUnitTests/main.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/MathUnitTests/unittests.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/src/gtest-all.cc
+        ${THIRD_PARTY_DIR}/googletest/googletest/src/gtest-all.cc
     )
 
     set(MATH_UNITTESTS_INCLUDE_DIR
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/include/
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googlemock/include/
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/
+        ${THIRD_PARTY_DIR}/googletest/googletest/include/
+        ${THIRD_PARTY_DIR}/googletest/googlemock/include/
+        ${THIRD_PARTY_DIR}/googletest/googletest/
         ${CMAKE_CURRENT_SOURCE_DIR}/src/
     )
 
@@ -2217,14 +2229,14 @@ if(BUILD_TESTS AND BUILD_VULKAN)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/VulkanUnitTests/Driver.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/VulkanUnitTests/main.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/VulkanUnitTests/unittests.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/src/gtest-all.cc
+        ${THIRD_PARTY_DIR}/googletest/googletest/src/gtest-all.cc
     )
 
     set(VK_UNITTESTS_INCLUDE_DIR
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/include/
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googlemock/include/
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest/googletest/
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/SPIRV-Tools/include
+        ${THIRD_PARTY_DIR}/googletest/googletest/include/
+        ${THIRD_PARTY_DIR}/googletest/googlemock/include/
+        ${THIRD_PARTY_DIR}/googletest/googletest/
+        ${THIRD_PARTY_DIR}/SPIRV-Tools/include
         ${CMAKE_CURRENT_SOURCE_DIR}/include/
     )
 
