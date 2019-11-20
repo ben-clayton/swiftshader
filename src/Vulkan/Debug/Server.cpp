@@ -14,7 +14,11 @@
 
 #include "Server.hpp"
 
-#include "WeakMap.hpp"
+#include "Context.hpp"
+#include "EventListener.hpp"
+#include "File.hpp"
+#include "Thread.hpp"
+#include "Variable.hpp"
 
 #include "dap/network.h"
 #include "dap/protocol.h"
@@ -24,214 +28,35 @@
 #include <thread>
 #include <unordered_set>
 
-namespace
-{
-
-constexpr int port = 19020;
-
-struct VirtualFile : public vk::dbg::File
-{
-	inline VirtualFile(const int id, const char* name, const char* source) :
-	    File(id),
-	    name_(name),
-	    source(source ? source : "") {}
-
-	std::string dir() const override;
-	std::string name() const override;
-	void clearBreakpoints() override;
-	void addBreakpoint(int line) override;
-	bool hasBreakpoint(int line) const override;
-	bool isVirtual() const override;
-
-	const std::string name_;
-	const std::string source;
-
-	mutable std::mutex breakpointMutex;
-	std::unordered_set<int> breakpoints;  // guarded by breakpointMutex
-};
-
-std::string VirtualFile::dir() const
-{
-	return "";
-}
-std::string VirtualFile::name() const
-{
-	return name_;
-}
-void VirtualFile::clearBreakpoints()
-{
-	std::unique_lock<std::mutex> lock(breakpointMutex);
-	breakpoints.clear();
-}
-void VirtualFile::addBreakpoint(int line)
-{
-	std::unique_lock<std::mutex> lock(breakpointMutex);
-	breakpoints.emplace(line);
-}
-bool VirtualFile::hasBreakpoint(int line) const
-{
-	std::unique_lock<std::mutex> lock(breakpointMutex);
-	return breakpoints.count(line) > 0;
-}
-bool VirtualFile::isVirtual() const
-{
-	return true;
-}
-
-struct PhysicalFile : public VirtualFile
-{
-	inline PhysicalFile(const int id,
-	                    const char* name,
-	                    const char* dir,
-	                    const char* source) :
-	    VirtualFile(id, name, source),
-	    dir_(dir) {}
-
-	std::string dir() const override;
-	bool isVirtual() const override;
-
-	const std::string dir_;
-};
-
-std::string PhysicalFile::dir() const
-{
-	return dir_;
-}
-bool PhysicalFile::isVirtual() const
-{
-	return false;
-}
-
-struct Files
-{
-	using SourceBreakpoints = dap::array<dap::SourceBreakpoint>;
-
-	template <typename F>
-	void foreach(const F&);
-
-	std::shared_ptr<vk::dbg::File> add(
-	    const std::shared_ptr<vk::dbg::File>& file);
-	std::shared_ptr<vk::dbg::File> get(vk::dbg::File::Id id) const;
-
-	void setPendingBreakpoints(const char* name, const SourceBreakpoints& bps);
-
-private:
-	mutable std::mutex mutex;
-	std::unordered_map<vk::dbg::File::Id, std::shared_ptr<vk::dbg::File>> byId;
-	std::unordered_map<std::string, SourceBreakpoints> pendingBreakpoints;
-};
-
-template <typename F>
-void Files::foreach(const F& f)
-{
-	std::unique_lock<std::mutex> lock(mutex);
-	for(auto it : byId)
-	{
-		f(it.first, it.second);
-	}
-}
-
-std::shared_ptr<vk::dbg::File> Files::add(
-    const std::shared_ptr<vk::dbg::File>& file)
-{
-	std::unique_lock<std::mutex> lock(mutex);
-	byId.emplace(file->id, file);
-
-	auto it = pendingBreakpoints.find(file->name());
-	if(it != pendingBreakpoints.end())
-	{
-		for(auto bp : it->second)
-		{
-			file->addBreakpoint(bp.line);
-		}
-	}
-	return file;
-}
-
-std::shared_ptr<vk::dbg::File> Files::get(vk::dbg::File::Id id) const
-{
-	std::unique_lock<std::mutex> lock(mutex);
-	auto it = byId.find(id);
-	return it != byId.end() ? it->second : nullptr;
-}
-
-void Files::setPendingBreakpoints(const char* name,
-                                  const SourceBreakpoints& bps)
-{
-	std::unique_lock<std::mutex> lock(mutex);
-	pendingBreakpoints.emplace(name, bps);
-}
-
-}  // anonymous namespace
-
 namespace vk
 {
 namespace dbg
 {
 
-// clang-format off
-std::shared_ptr<Type> TypeOf<bool>::get()              { static auto ty = std::make_shared<Type>(Kind::Bool); return ty; }
-std::shared_ptr<Type> TypeOf<uint8_t>::get()           { static auto ty = std::make_shared<Type>(Kind::U8);   return ty; }
-std::shared_ptr<Type> TypeOf<int8_t>::get()            { static auto ty = std::make_shared<Type>(Kind::S8);   return ty; }
-std::shared_ptr<Type> TypeOf<uint16_t>::get()          { static auto ty = std::make_shared<Type>(Kind::U16);  return ty; }
-std::shared_ptr<Type> TypeOf<int16_t>::get()           { static auto ty = std::make_shared<Type>(Kind::S16);  return ty; }
-std::shared_ptr<Type> TypeOf<float>::get()             { static auto ty = std::make_shared<Type>(Kind::F32);  return ty; }
-std::shared_ptr<Type> TypeOf<uint32_t>::get()          { static auto ty = std::make_shared<Type>(Kind::U32);  return ty; }
-std::shared_ptr<Type> TypeOf<int32_t>::get()           { static auto ty = std::make_shared<Type>(Kind::S32);  return ty; }
-std::shared_ptr<Type> TypeOf<double>::get()            { static auto ty = std::make_shared<Type>(Kind::F64);  return ty; }
-std::shared_ptr<Type> TypeOf<uint64_t>::get()          { static auto ty = std::make_shared<Type>(Kind::U64);  return ty; }
-std::shared_ptr<Type> TypeOf<int64_t>::get()           { static auto ty = std::make_shared<Type>(Kind::S64);  return ty; }
-std::shared_ptr<Type> TypeOf<VariableContainer>::get() { static auto ty = std::make_shared<Type>(Kind::VariableContainer); return ty; }
-// clang-format on
-
-class Server::Impl : public Server
+class Server::Impl : public Server, public EventListener
 {
 public:
-	Impl();
+	Impl(const std::shared_ptr<Context>& ctx, int port);
 	~Impl();
 
-	std::shared_ptr<Thread> currentThread() override;
-	std::shared_ptr<File> file(File::Id id) override;
-	std::shared_ptr<File> createVirtualFile(const char* name,
-	                                        const char* source) override;
-	std::shared_ptr<File> createPhysicalFile(const char* name,
-	                                         const char* dir,
-	                                         const char* source) override;
-	std::shared_ptr<VariableContainer> createVariableContainer() override;
-
-	std::shared_ptr<Scope> createScope(const std::shared_ptr<File>& file);
-	std::shared_ptr<Frame> createFrame(const std::shared_ptr<File>& file);
-
-	bool isFunctionBreakpoint(const char*);
-
-private:
-	friend class Thread;
+	// EventListener
+	void onThreadStarted(ID<Thread>) override;
+	void onThreadStepped(ID<Thread>) override;
+	void onLineBreakpointHit(ID<Thread>) override;
+	void onFunctionBreakpointHit(ID<Thread>) override;
 
 	dap::Scope scope(const char* type, Scope*);
 	dap::Source source(File*);
 	std::shared_ptr<File> file(const dap::Source& source);
-	std::string type(const Type*);
-	std::string value(const Value*);
 
-	mutable std::recursive_mutex mutex;
-	std::unique_ptr<dap::net::Server> server;
-	std::unique_ptr<dap::Session> session;
-	Files files;
-	std::unordered_map<std::thread::id, std::shared_ptr<Thread>> threadsByStdId;
-	WeakMap<Thread::Id, Thread> threads;
-	WeakMap<VariableContainer::Id, VariableContainer> variableContainers;
-	WeakMap<Frame::Id, Frame> frames;
-	WeakMap<Scope::Id, Scope> scopes;
-	std::unordered_set<std::string> functionBreakpoints;
-	std::atomic<Thread::Id> nextThreadId = { 1 };
-	std::atomic<File::Id> nextFileId = { 1 };
-	std::atomic<VariableContainer::Id> nextVariableContainerId = { 1 };
-	std::atomic<Frame::Id> nextFrameId = { 1 };
-	std::atomic<Frame::Id> nextScopeId = { 1 };
-	bool clientIsVisualStudio = false;
+	const std::shared_ptr<Context> ctx;
+	const std::unique_ptr<dap::net::Server> server;
+	const std::unique_ptr<dap::Session> session;
+	std::atomic<bool> clientIsVisualStudio = { false };
 };
 
-Server::Impl::Impl() :
+Server::Impl::Impl(const std::shared_ptr<Context>& context, int port) :
+    ctx(context),
     server(dap::net::Server::create()),
     session(dap::Session::create())
 {
@@ -264,11 +89,11 @@ Server::Impl::Impl() :
 	session->registerHandler(
 	    [this](const dap::SetFunctionBreakpointsRequest& req) {
 		    printf("SetFunctionBreakpointsRequest receieved\n");
-		    std::unique_lock<std::recursive_mutex> lock(mutex);
+		    auto lock = ctx->lock();
 		    dap::SetFunctionBreakpointsResponse response;
 		    for(auto const& bp : req.breakpoints)
 		    {
-			    functionBreakpoints.emplace(bp.name);
+			    lock.addFunctionBreakpoint(bp.name.c_str());
 			    response.breakpoints.push_back({});
 		    }
 		    return response;
@@ -296,8 +121,14 @@ Server::Impl::Impl() :
 			    }
 			    else if(req.source.name.has_value())
 			    {
-				    files.setPendingBreakpoints(req.source.name.value().c_str(),
-				                                req.breakpoints.value());
+				    std::vector<int> lines;
+				    lines.reserve(breakpoints.size());
+				    for(auto const& bp : breakpoints)
+				    {
+					    lines.push_back(bp.line);
+				    }
+				    ctx->lock().addPendingBreakpoints(req.source.name.value(),
+				                                      lines);
 			    }
 		    }
 
@@ -314,15 +145,26 @@ Server::Impl::Impl() :
 
 	session->registerHandler([this](const dap::ThreadsRequest& req) {
 		printf("ThreadsRequest receieved\n");
-		std::unique_lock<std::recursive_mutex> lock(mutex);
+		auto lock = ctx->lock();
 		dap::ThreadsResponse response;
-		for(auto it : threads)
+		for(auto thread : lock.threads())
 		{
-			auto thread = it.second;
+			std::string name = thread->getName();
+			if(clientIsVisualStudio)
+			{  // WORKAROUND:
+				// https://github.com/microsoft/VSDebugAdapterHost/issues/15
+				for(size_t i = 0; i < name.size(); i++)
+				{
+					if(name[i] == '.')
+					{
+						name[i] = '_';
+					}
+				}
+			}
 
 			dap::Thread out;
-			out.id = thread->id;
-			out.name = thread->getName();
+			out.id = thread->id.value();
+			out.name = name;
 			response.threads.push_back(out);
 		};
 		return response;
@@ -333,8 +175,8 @@ Server::Impl::Impl() :
 	        -> dap::ResponseOrError<dap::StackTraceResponse> {
 		    printf("StackTraceRequest receieved\n");
 
-		    std::unique_lock<std::recursive_mutex> lock(mutex);
-		    auto thread = threads.get(req.threadId);
+		    auto lock = ctx->lock();
+		    auto thread = lock.get(Thread::ID(req.threadId));
 		    if(!thread)
 		    {
 			    return dap::Error("Thread %d not found", req.threadId);
@@ -350,7 +192,7 @@ Server::Impl::Impl() :
 			    auto const& loc = frame->location;
 			    dap::StackFrame sf;
 			    sf.column = 0;
-			    sf.id = frame->id;
+			    sf.id = frame->id.value();
 			    sf.name = frame->function;
 			    sf.line = loc.line;
 			    if(loc.file)
@@ -366,8 +208,8 @@ Server::Impl::Impl() :
 	                             -> dap::ResponseOrError<dap::ScopesResponse> {
 		printf("ScopesRequest receieved\n");
 
-		std::unique_lock<std::recursive_mutex> lock(mutex);
-		auto frame = frames.get(req.frameId);
+		auto lock = ctx->lock();
+		auto frame = lock.get(Frame::ID(req.frameId));
 		if(!frame)
 		{
 			return dap::Error("Frame %d not found", req.frameId);
@@ -386,12 +228,12 @@ Server::Impl::Impl() :
 	                             -> dap::ResponseOrError<dap::VariablesResponse> {
 		printf("VariablesRequest receieved\n");
 
-		std::unique_lock<std::recursive_mutex> lock(mutex);
-		auto vars = variableContainers.get(req.variablesReference);
+		auto lock = ctx->lock();
+		auto vars = lock.get(VariableContainer::ID(req.variablesReference));
 		if(!vars)
 		{
 			return dap::Error("VariablesReference %d not found",
-			                  req.variablesReference);
+			                  int(req.variablesReference));
 		}
 
 		dap::VariablesResponse response;
@@ -402,12 +244,12 @@ Server::Impl::Impl() :
 				dap::Variable out;
 				out.evaluateName = v.name;
 				out.name = v.name;
-				out.type = type(v.value->type().get());
-				out.value = value(v.value.get());
+				out.type = v.value->type()->name();
+				out.value = v.value->string();
 				if(v.value->type()->kind == Kind::VariableContainer)
 				{
 					auto const vc = static_cast<const VariableContainer*>(v.value.get());
-					out.variablesReference = vc->id;
+					out.variablesReference = vc->id.value();
 				}
 				response.variables.push_back(out);
 			}
@@ -418,16 +260,17 @@ Server::Impl::Impl() :
 	session->registerHandler([this](const dap::SourceRequest& req)
 	                             -> dap::ResponseOrError<dap::SourceResponse> {
 		printf("SourceRequest receieved\n");
+
 		dap::SourceResponse response;
 		uint64_t id = req.sourceReference;
-		std::unique_lock<std::recursive_mutex> lock(mutex);
-		auto file = this->file(id);
+
+		auto lock = ctx->lock();
+		auto file = lock.get(File::ID(id));
 		if(!file)
 		{
 			return dap::Error("Source %d not found", id);
 		}
-		auto vfile = static_cast<VirtualFile*>(file.get());
-		response.content = vfile->source;
+		response.content = file->source();
 		return response;
 	});
 
@@ -438,25 +281,30 @@ Server::Impl::Impl() :
 		dap::StoppedEvent event;
 		event.reason = "pause";
 
-		std::unique_lock<std::recursive_mutex> lock(mutex);
-		if(auto thread = threads.get(req.threadId))
+		auto lock = ctx->lock();
+		if(auto thread = lock.get(Thread::ID(req.threadId)))
 		{
 			thread->pause();
 			event.threadId = req.threadId;
 		}
 		else
 		{
-			for(auto it : threads)
+			auto threads = lock.threads();
+			for(auto thread : threads)
 			{
-				it.second->pause();
+				thread->pause();
 			}
 			event.allThreadsStopped = true;
 
 			// Workaround for
 			// https://github.com/microsoft/VSDebugAdapterHost/issues/11
-			for(auto it : threads)
+			if(clientIsVisualStudio)
 			{
-				event.threadId = it.first;
+				for(auto thread : threads)
+				{
+					event.threadId = thread->id.value();
+					break;
+				}
 			}
 		}
 
@@ -472,14 +320,15 @@ Server::Impl::Impl() :
 
 		dap::ContinueResponse response;
 
-		if(auto thread = threads.get(req.threadId))
+		auto lock = ctx->lock();
+		if(auto thread = lock.get(Thread::ID(req.threadId)))
 		{
 			thread->resume();
 			response.allThreadsContinued = false;
 		}
 		else
 		{
-			for(auto it : threads)
+			for(auto it : lock.threads())
 			{
 				thread->resume();
 			}
@@ -493,7 +342,8 @@ Server::Impl::Impl() :
 	                             -> dap::ResponseOrError<dap::NextResponse> {
 		printf("NextRequest receieved\n");
 
-		auto thread = threads.get(req.threadId);
+		auto lock = ctx->lock();
+		auto thread = lock.get(Thread::ID(req.threadId));
 		if(!thread)
 		{
 			return dap::Error("Unknown thread %d", int(req.threadId));
@@ -507,7 +357,8 @@ Server::Impl::Impl() :
 	                             -> dap::ResponseOrError<dap::StepInResponse> {
 		printf("StepInRequest receieved\n");
 
-		auto thread = threads.get(req.threadId);
+		auto lock = ctx->lock();
+		auto thread = lock.get(Thread::ID(req.threadId));
 		if(!thread)
 		{
 			return dap::Error("Unknown thread %d", int(req.threadId));
@@ -521,7 +372,8 @@ Server::Impl::Impl() :
 	                             -> dap::ResponseOrError<dap::StepOutResponse> {
 		printf("StepOutRequest receieved\n");
 
-		auto thread = threads.get(req.threadId);
+		auto lock = ctx->lock();
+		auto thread = lock.get(Thread::ID(req.threadId));
 		if(!thread)
 		{
 			return dap::Error("Unknown thread %d", int(req.threadId));
@@ -535,10 +387,10 @@ Server::Impl::Impl() :
 	                             -> dap::ResponseOrError<dap::EvaluateResponse> {
 		printf("EvaluateRequest receieved\n");
 
-		std::unique_lock<std::recursive_mutex> lock(mutex);
+		auto lock = ctx->lock();
 		if(req.frameId.has_value())
 		{
-			auto frame = frames.get(req.frameId.value());
+			auto frame = lock.get(Frame::ID(req.frameId.value(0)));
 			if(!frame)
 			{
 				return dap::Error("Unknown frame %d", int(req.frameId.value()));
@@ -546,8 +398,8 @@ Server::Impl::Impl() :
 
 			dap::EvaluateResponse response;
 			auto findHandler = [&](const Variable& var) {
-				response.result = value(var.value.get());
-				response.type = type(var.value->type().get());
+				response.result = var.value->string();
+				response.type = var.value->type()->name();
 			};
 			if(frame->locals->variables->find(req.expression, findHandler) ||
 			   frame->arguments->variables->find(req.expression, findHandler) ||
@@ -575,42 +427,47 @@ Server::Impl::Impl() :
 	printf("Waiting for debugger connection...\n");
 	server->start(port, [&](const std::shared_ptr<dap::ReaderWriter>& rw) {
 		session->bind(rw);
+		ctx->addListener(this);
 	});
 	configurationDone.wait();
 }
 
 Server::Impl::~Impl()
 {
+	ctx->removeListener(this);
 	server->stop();
 }
 
-std::shared_ptr<Thread> Server::Impl::currentThread()
+void Server::Impl::onThreadStarted(ID<Thread> id)
 {
-	std::unique_lock<std::recursive_mutex> lock(mutex);
-	auto threadIt = threadsByStdId.find(std::this_thread::get_id());
-	if(threadIt != threadsByStdId.end())
-	{
-		return threadIt->second;
-	}
-	auto id = ++nextThreadId;
-	char name[256];
-	snprintf(name, sizeof(name), "Thread<0x%x>", int(id));
-
-	auto thread = std::make_shared<Thread>(id, this);
-	threads.add(id, thread);
-	thread->setName(name);
-	threadsByStdId.emplace(std::this_thread::get_id(), thread);
-
 	dap::ThreadEvent event;
 	event.reason = "started";
-	event.threadId = id;
+	event.threadId = id.value();
 	session->send(event);
-	return thread;
 }
 
-std::shared_ptr<File> Server::Impl::file(File::Id id)
+void Server::Impl::onThreadStepped(ID<Thread> id)
 {
-	return files.get(id);
+	dap::StoppedEvent event;
+	event.threadId = id.value();
+	event.reason = "step";
+	session->send(event);
+}
+
+void Server::Impl::onLineBreakpointHit(ID<Thread> id)
+{
+	dap::StoppedEvent event;
+	event.threadId = id.value();
+	event.reason = "breakpoint";
+	session->send(event);
+}
+
+void Server::Impl::onFunctionBreakpointHit(ID<Thread> id)
+{
+	dap::StoppedEvent event;
+	event.threadId = id.value();
+	event.reason = "function breakpoint";
+	session->send(event);
 }
 
 dap::Scope Server::Impl::scope(const char* type, Scope* s)
@@ -621,18 +478,17 @@ dap::Scope Server::Impl::scope(const char* type, Scope* s)
 	out.source = source(s->file.get());
 	out.name = type;
 	out.presentationHint = type;
-	out.variablesReference = s->variables->id;
+	out.variablesReference = s->variables->id.value();
 	return out;
 }
 
 dap::Source Server::Impl::source(File* file)
 {
-	auto f = reinterpret_cast<VirtualFile*>(file);
 	dap::Source out;
-	out.name = f->name();
+	out.name = file->name;
 	if(file->isVirtual())
 	{
-		out.sourceReference = f->id;
+		out.sourceReference = file->id.value();
 	}
 	else
 	{
@@ -643,25 +499,29 @@ dap::Source Server::Impl::source(File* file)
 
 std::shared_ptr<File> Server::Impl::file(const dap::Source& source)
 {
+	auto lock = ctx->lock();
 	if(source.sourceReference.has_value())
 	{
 		auto id = source.sourceReference.value();
-		if(auto file = files.get(id))
+		if(auto file = lock.get(File::ID(id)))
 		{
 			return file;
 		}
 	}
 
+	auto files = lock.files();
 	if(source.path.has_value())
 	{
 		auto path = source.path.value();
 		std::shared_ptr<File> out;
-		files.foreach([&](File::Id, const std::shared_ptr<File>& file) {
+		for(auto file : files)
+		{
 			if(file->path() == path)
 			{
 				out = file;
+				break;
 			}
-		});
+		}
 		return out;
 	}
 
@@ -669,337 +529,23 @@ std::shared_ptr<File> Server::Impl::file(const dap::Source& source)
 	{
 		auto name = source.name.value();
 		std::shared_ptr<File> out;
-		files.foreach([&](File::Id, const std::shared_ptr<File>& file) {
-			if(file->name() == name)
+		for(auto file : files)
+		{
+			if(file->name == name)
 			{
 				out = file;
+				break;
 			}
-		});
+		}
 		return out;
 	}
 
 	return nullptr;
 }
 
-std::string Server::Impl::type(const Type* ty)
+std::shared_ptr<Server> Server::create(const std::shared_ptr<Context>& ctx, int port)
 {
-	switch(ty->kind)
-	{
-	case Kind::Bool:
-		return "bool";
-	case Kind::U8:
-		return "uint8_t";
-	case Kind::S8:
-		return "int8_t";
-	case Kind::U16:
-		return "uint16_t";
-	case Kind::S16:
-		return "int16_t";
-	case Kind::F32:
-		return "float";
-	case Kind::U32:
-		return "uint32_t";
-	case Kind::S32:
-		return "int32_t";
-	case Kind::F64:
-		return "double";
-	case Kind::U64:
-		return "uint64_t";
-	case Kind::S64:
-		return "int64_t";
-	case Kind::Ptr:
-		return type(ty->elem.get()) + "*";
-	case Kind::VariableContainer:
-		return "struct";
-	}
-	return "";
-}
-
-std::string Server::Impl::value(const Value* val)
-{
-	switch(val->type()->kind)
-	{
-	case Kind::Bool:
-		return *reinterpret_cast<const bool*>(val->get()) ? "true" : "false";
-	case Kind::U8:
-		return std::to_string(*reinterpret_cast<const uint8_t*>(val->get()));
-	case Kind::S8:
-		return std::to_string(*reinterpret_cast<const int8_t*>(val->get()));
-	case Kind::U16:
-		return std::to_string(*reinterpret_cast<const uint16_t*>(val->get()));
-	case Kind::S16:
-		return std::to_string(*reinterpret_cast<const int16_t*>(val->get()));
-	case Kind::F32:
-		return std::to_string(*reinterpret_cast<const float*>(val->get()));
-	case Kind::U32:
-		return std::to_string(*reinterpret_cast<const uint32_t*>(val->get()));
-	case Kind::S32:
-		return std::to_string(*reinterpret_cast<const int32_t*>(val->get()));
-	case Kind::F64:
-		return std::to_string(*reinterpret_cast<const double*>(val->get()));
-	case Kind::U64:
-		return std::to_string(*reinterpret_cast<const uint64_t*>(val->get()));
-	case Kind::S64:
-		return std::to_string(*reinterpret_cast<const int64_t*>(val->get()));
-	case Kind::Ptr:
-		return std::to_string(reinterpret_cast<uintptr_t>(val->get()));
-	case Kind::VariableContainer:
-		auto const* vc = static_cast<const VariableContainer*>(val);
-		std::string out = "";
-		vc->foreach(0, [&](const Variable& var) {
-			if(out.size() > 0)
-			{
-				out += ", ";
-			}
-			out += var.name;
-			out += ": ";
-			out += value(var.value.get());
-		});
-		return "[" + out + "]";
-	}
-	return "";
-}
-
-std::shared_ptr<File> Server::Impl::createVirtualFile(const char* name,
-                                                      const char* source)
-{
-	auto id = nextFileId++;
-	std::string sanitizedName = name;
-	if(clientIsVisualStudio)
-	{  // WORKAROUND:
-		// https://github.com/microsoft/VSDebugAdapterHost/issues/15
-		for(size_t i = 0; i < sanitizedName.size(); i++)
-		{
-			if(sanitizedName[i] == '.')
-			{
-				sanitizedName[i] = '_';
-			}
-		}
-	}
-	return files.add(
-	    std::make_shared<VirtualFile>(id, sanitizedName.c_str(), source));
-}
-
-std::shared_ptr<File> Server::Impl::createPhysicalFile(const char* name,
-                                                       const char* dir,
-                                                       const char* source)
-{
-	auto id = nextFileId++;
-	return files.add(std::make_shared<PhysicalFile>(id, name, dir, source));
-}
-
-std::shared_ptr<VariableContainer> Server::Impl::createVariableContainer()
-{
-	std::unique_lock<std::recursive_mutex> lock(mutex);
-	auto container = std::make_shared<VariableContainer>(nextVariableContainerId++);
-	variableContainers.add(container->id, container);
-	return container;
-}
-
-std::shared_ptr<Scope> Server::Impl::createScope(
-    const std::shared_ptr<File>& file)
-{
-	std::unique_lock<std::recursive_mutex> lock(mutex);
-	auto scope = std::make_shared<Scope>(nextScopeId++, file, createVariableContainer());
-	scopes.add(scope->id, scope);
-	return scope;
-}
-
-std::shared_ptr<Frame> Server::Impl::createFrame(
-    const std::shared_ptr<File>& file)
-{
-	std::unique_lock<std::recursive_mutex> lock(mutex);
-	auto frame = std::make_shared<Frame>(nextFrameId++);
-	frames.add(frame->id, frame);
-	frame->arguments = createScope(file);
-	frame->locals = createScope(file);
-	frame->registers = createScope(file);
-	return frame;
-}
-
-bool Server::Impl::isFunctionBreakpoint(const char* name)
-{
-	std::unique_lock<std::recursive_mutex> lock(mutex);
-	return functionBreakpoints.count(name) > 0;
-}
-
-std::shared_ptr<Server> Server::get()
-{
-	static std::mutex mutex;
-	static std::weak_ptr<Server> serverWeak;
-	std::unique_lock<std::mutex> lock(mutex);
-	auto server = serverWeak.lock();
-	if(!server)
-	{
-		server = std::shared_ptr<Server>(new Server::Impl());
-		serverWeak = server;
-	}
-	return server;
-}
-
-Thread::Thread(int id, Server::Impl* server) :
-    id(id),
-    server(server) {}
-
-void Thread::setName(const char* name)
-{
-	std::unique_lock<std::mutex> lock(nameMutex);
-	this->name = name;
-}
-
-std::string Thread::getName() const
-{
-	std::unique_lock<std::mutex> lock(nameMutex);
-	return name;
-}
-
-void Thread::update(const Location& location)
-{
-	assert(location.file != nullptr);
-	std::unique_lock<std::mutex> lock(stateMutex);
-	frames.back()->location = location;
-
-	if(state == State::Running)
-	{
-		if(location.file->hasBreakpoint(location.line))
-		{
-			onLineBreakpoint();
-			state = State::Paused;
-		}
-	}
-
-	switch(state)
-	{
-	case State::Paused:
-		stateCV.wait(lock, [this] { return state != State::Paused; });
-		break;
-	case State::Stepping:
-	{
-		if(!pauseAtFrame || pauseAtFrame == frames.back())
-		{
-			onStep();
-			state = State::Paused;
-			stateCV.wait(lock, [this] { return state != State::Paused; });
-			pauseAtFrame = 0;
-		}
-		break;
-	}
-	case State::Running:
-		break;
-	}
-}
-
-void Thread::onStep()
-{
-	dap::StoppedEvent event;
-	event.threadId = id;
-	event.reason = "step";
-	server->session->send(event);
-}
-
-void Thread::onLineBreakpoint()
-{
-	dap::StoppedEvent event;
-	event.threadId = id;
-	event.reason = "breakpoint";
-	server->session->send(event);
-}
-
-void Thread::onFunctionBreakpoint()
-{
-	dap::StoppedEvent event;
-	event.threadId = id;
-	event.reason = "function breakpoint";
-	server->session->send(event);
-}
-
-void Thread::enter(const std::shared_ptr<File>& file, const char* function)
-{
-	auto frame = server->createFrame(file);
-	auto isFunctionBreakpoint = server->isFunctionBreakpoint(function);
-
-	std::unique_lock<std::mutex> lock(stateMutex);
-	frame->function = function;
-	frames.push_back(frame);
-	if(isFunctionBreakpoint)
-	{
-		onFunctionBreakpoint();
-		state = State::Paused;
-	}
-}
-
-void Thread::exit()
-{
-	std::unique_lock<std::mutex> lock(stateMutex);
-	frames.pop_back();
-}
-
-std::shared_ptr<VariableContainer> Thread::registers() const
-{
-	std::unique_lock<std::mutex> lock(stateMutex);
-	return frames.back()->registers->variables;
-}
-
-std::shared_ptr<VariableContainer> Thread::locals() const
-{
-	std::unique_lock<std::mutex> lock(stateMutex);
-	return frames.back()->locals->variables;
-}
-
-std::shared_ptr<VariableContainer> Thread::arguments() const
-{
-	std::unique_lock<std::mutex> lock(stateMutex);
-	return frames.back()->arguments->variables;
-}
-
-std::vector<std::shared_ptr<Frame>> Thread::stack() const
-{
-	std::unique_lock<std::mutex> lock(stateMutex);
-	return frames;
-}
-
-Thread::State Thread::getState() const
-{
-	std::unique_lock<std::mutex> lock(stateMutex);
-	return state;
-}
-
-void Thread::resume()
-{
-	std::unique_lock<std::mutex> lock(stateMutex);
-	state = State::Running;
-	lock.unlock();
-	stateCV.notify_all();
-}
-
-void Thread::pause()
-{
-	std::unique_lock<std::mutex> lock(stateMutex);
-	state = State::Paused;
-}
-
-void Thread::stepIn()
-{
-	std::unique_lock<std::mutex> lock(stateMutex);
-	state = State::Stepping;
-	pauseAtFrame.reset();
-	stateCV.notify_all();
-}
-
-void Thread::stepOver()
-{
-	std::unique_lock<std::mutex> lock(stateMutex);
-	state = State::Stepping;
-	pauseAtFrame = frames.back();
-	stateCV.notify_all();
-}
-
-void Thread::stepOut()
-{
-	std::unique_lock<std::mutex> lock(stateMutex);
-	state = State::Stepping;
-	pauseAtFrame = (frames.size() > 1) ? frames[frames.size() - 1] : nullptr;
-	stateCV.notify_all();
+	return std::make_shared<Server::Impl>(ctx, port);
 }
 
 }  // namespace dbg

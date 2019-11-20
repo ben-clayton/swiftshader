@@ -12,30 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef VK_DEBUG_SERVER_HPP_
-#define VK_DEBUG_SERVER_HPP_
+#ifndef VK_DEBUG_EVENT_LISTENER_HPP_
+#define VK_DEBUG_EVENT_LISTENER_HPP_
 
-#include <memory>
+#include "ID.hpp"
 
 namespace vk
 {
 namespace dbg
 {
 
-class Context;
+class Thread;
 
-class Server
+class EventListener
 {
 public:
-	static std::shared_ptr<Server> create(const std::shared_ptr<Context>&, int port);
-
-	virtual ~Server() = default;
-
-private:
-	class Impl;
+	virtual ~EventListener() = default;
+	virtual void onThreadStarted(ID<Thread>) {}
+	virtual void onThreadStepped(ID<Thread>) {}
+	virtual void onLineBreakpointHit(ID<Thread>) {}
+	virtual void onFunctionBreakpointHit(ID<Thread>) {}
 };
 
 }  // namespace dbg
 }  // namespace vk
 
-#endif  // VK_DEBUG_SERVER_HPP_
+#endif  // VK_DEBUG_EVENT_LISTENER_HPP_

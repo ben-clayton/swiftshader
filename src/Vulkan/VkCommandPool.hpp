@@ -16,10 +16,16 @@
 #define VK_COMMAND_POOL_HPP_
 
 #include "VkObject.hpp"
+
 #include <set>
+#include <memory>
 
 namespace vk
 {
+namespace dbg
+{
+class Context;
+} // namespace vk::dbg
 
 class CommandPool : public Object<CommandPool, VkCommandPool>
 {
@@ -29,7 +35,7 @@ public:
 
 	static size_t ComputeRequiredAllocationSize(const VkCommandPoolCreateInfo* pCreateInfo);
 
-	VkResult allocateCommandBuffers(VkCommandBufferLevel level, uint32_t commandBufferCount, VkCommandBuffer* pCommandBuffers);
+	VkResult allocateCommandBuffers(VkCommandBufferLevel level, uint32_t commandBufferCount, VkCommandBuffer* pCommandBuffers, const std::shared_ptr<dbg::Context>& dbgctx);
 	void freeCommandBuffers(uint32_t commandBufferCount, const VkCommandBuffer* pCommandBuffers);
 	VkResult reset(VkCommandPoolResetFlags flags);
 	void trim(VkCommandPoolTrimFlags flags);

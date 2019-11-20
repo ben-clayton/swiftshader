@@ -26,8 +26,6 @@
 #include "Device/Config.hpp"
 #include "Device/Sampler.hpp"
 
-#include "Vulkan/Debug/Server.hpp"
-
 #include <spirv/unified1/spirv.hpp>
 
 #include <array>
@@ -52,6 +50,13 @@ namespace vk
 	class Sampler;
 	class RenderPass;
 	struct SampledImageDescriptor;
+
+namespace dbg
+{
+	class Context;
+	class File;
+} // namespace vk::dbg
+
 } // namespace vk
 
 namespace sw
@@ -706,7 +711,8 @@ namespace sw
 		            InsnStore const &insns,
 		            const vk::RenderPass *renderPass,
 		            uint32_t subpassIndex,
-		            bool robustBufferAccess);
+		            bool robustBufferAccess,
+		            const std::shared_ptr<vk::dbg::Context>& dbgctx);
 
 		struct Modes
 		{
@@ -902,9 +908,12 @@ namespace sw
 		std::unordered_map<spv::BuiltIn, BuiltinMapping, BuiltInHash> outputBuiltins;
 		WorkgroupMemory workgroupMemory;
 
-		std::unordered_map<const void*, int> spirvLineMappings;
-		std::shared_ptr<vk::dbg::File> spirvFile;
-		std::unordered_map<String, std::shared_ptr<vk::dbg::File>> files;
+		struct {
+			std::shared_ptr<vk::dbg::Context> ctx;
+			std::unordered_map<const void*, int> spirvLineMappings;
+			std::shared_ptr<vk::dbg::File> spirvFile;
+			std::unordered_map<String, std::shared_ptr<vk::dbg::File>> files;
+		} dbg;
 
 	private:
 		const uint32_t codeSerialID;
@@ -988,9 +997,21 @@ namespace sw
 		template<typename F>
 		void VisitInterface(Object::ID id, F f) const;
 
+		struct MemoryElement
+		{
+			uint32_t index;   // index of the scalar element
+			uint32_t offset;  // offset (in bytes) from the base of the object
+			const Type& type; // element type
+		};
+
+		// VisitMemoryObject() walks a type tree in an explicitly laid out
+		// storage class, calling a functor for each scalar element within the
+		// object.
+		// F must be a function of the signature: void(const MemoryElement&)
 		template<typename F>
 		void VisitMemoryObject(Object::ID id, F f) const;
 
+		// VisitMemoryObjectInner() is internally called by VisitMemoryObject()
 		template<typename F>
 		void VisitMemoryObjectInner(Type::ID id, Decorations d, uint32_t &index, uint32_t offset, F f) const;
 
@@ -1032,7 +1053,7 @@ namespace sw
 				return RValue<SIMD::Int>(storesAndAtomicsMaskValue);
 			}
 
-			void setActiveLaneMask(RValue<SIMD::Int> mask);
+			void setActiveLaneMask(RValue<SIMD::Int> mask, const std::shared_ptr<vk::dbg::Context>& dbgctx);
 
 			// Add a new active lane mask edge from the current block to out.
 			// The edge mask value will be (mask AND activeLaneMaskValue).
@@ -1364,7 +1385,10 @@ namespace sw
 		SIMD::Int localInvocationIndex;
 		std::array<SIMD::Int, 3> localInvocationID;
 		std::array<SIMD::Int, 3> globalInvocationID;
-		Pointer<Byte> debugContext;
+
+		struct {
+			Pointer<Byte> ctx;
+		} dbg;
 
 		void createVariable(SpirvShader::Object::ID id, uint32_t size)
 		{

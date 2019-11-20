@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef VK_DEBUG_SERVER_HPP_
-#define VK_DEBUG_SERVER_HPP_
+#ifndef VK_DEBUG_LOCATION_HPP_
+#define VK_DEBUG_LOCATION_HPP_
 
 #include <memory>
 
@@ -22,20 +22,21 @@ namespace vk
 namespace dbg
 {
 
-class Context;
+class File;
 
-class Server
+struct Location
 {
-public:
-	static std::shared_ptr<Server> create(const std::shared_ptr<Context>&, int port);
-
-	virtual ~Server() = default;
-
-private:
-	class Impl;
+	inline Location() = default;
+	inline Location(int line, const std::shared_ptr<File>& file);
+	int line = 0;
+	std::shared_ptr<File> file;
 };
+
+Location::Location(int line, const std::shared_ptr<File>& file) :
+    line(line),
+    file(file) {}
 
 }  // namespace dbg
 }  // namespace vk
 
-#endif  // VK_DEBUG_SERVER_HPP_
+#endif  // VK_DEBUG_LOCATION_HPP_

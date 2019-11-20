@@ -42,6 +42,7 @@
 #include "VkShaderModule.hpp"
 #include "VkRenderPass.hpp"
 
+#include "Debug/Context.hpp"
 #include "Debug/Server.hpp"
 
 #if defined(VK_USE_PLATFORM_METAL_EXT) || defined(VK_USE_PLATFORM_MACOS_MVK)
@@ -152,10 +153,16 @@ std::shared_ptr<marl::Scheduler> getOrCreateScheduler()
 	return scheduler;
 }
 
-std::shared_ptr<vk::dbg::Server> getOrCreateDebugServer()
+std::shared_ptr<vk::dbg::Context> getDebugContext()
 {
-	static auto server = vk::dbg::Server::get();
-	return server;
+	static auto port = getenv("VK_DEBUG_PORT");
+	if (port)
+	{
+		static auto context = vk::dbg::Context::create();
+		static auto server = vk::dbg::Server::create(context, atoi(port));
+		return context;
+	}
+	return nullptr;
 }
 
 // initializeLibrary() is called by vkCreateInstance() to perform one-off global
@@ -168,7 +175,7 @@ void initializeLibrary()
 #endif  // __ANDROID__ && ENABLE_BUILD_VERSION_OUTPUT
 		setReactorDefaultConfig();
 		setCPUDefaults();
-		getOrCreateDebugServer();
+		getDebugContext();
 		return true;
 	}();
 	(void)doOnce;
@@ -1514,7 +1521,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(VkDevice device, VkPipe
 	VkResult errorResult = VK_SUCCESS;
 	for(uint32_t i = 0; i < createInfoCount; i++)
 	{
-		VkResult result = vk::GraphicsPipeline::Create(pAllocator, &pCreateInfos[i], &pPipelines[i], vk::Cast(device));
+		VkResult result = vk::GraphicsPipeline::Create(pAllocator, &pCreateInfos[i], &pPipelines[i], vk::Cast(device), getDebugContext());
 
 		if(result == VK_SUCCESS)
 		{
@@ -1546,7 +1553,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipel
 	VkResult errorResult = VK_SUCCESS;
 	for(uint32_t i = 0; i < createInfoCount; i++)
 	{
-		VkResult result = vk::ComputePipeline::Create(pAllocator, &pCreateInfos[i], &pPipelines[i], vk::Cast(device));
+		VkResult result = vk::ComputePipeline::Create(pAllocator, &pCreateInfos[i], &pPipelines[i], vk::Cast(device), getDebugContext());
 
 		if(result == VK_SUCCESS)
 		{
@@ -1912,7 +1919,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateCommandBuffers(VkDevice device, const V
 	}
 
 	return vk::Cast(pAllocateInfo->commandPool)->allocateCommandBuffers(
-		pAllocateInfo->level, pAllocateInfo->commandBufferCount, pCommandBuffers);
+		pAllocateInfo->level, pAllocateInfo->commandBufferCount, pCommandBuffers,
+		getDebugContext());
 }
 
 VKAPI_ATTR void VKAPI_CALL vkFreeCommandBuffers(VkDevice device, VkCommandPool commandPool, uint32_t commandBufferCount, const VkCommandBuffer* pCommandBuffers)

@@ -49,10 +49,12 @@ public:
 
 	inline iterator begin() const;
 	inline iterator end() const;
+	inline size_t approx_size() const;
 
 	inline std::shared_ptr<V> get(const K& key) const;
 	inline void add(const K& key, const std::shared_ptr<V>& val);
 	inline void remove(const K& key);
+
 
 private:
 	inline void reap();
@@ -117,6 +119,11 @@ template <typename K, typename V>
 typename WeakMap<K, V>::iterator WeakMap<K, V>::end() const
 {
 	return iterator(map.end(), map.end());
+}
+
+template <typename K, typename V>
+size_t WeakMap<K, V>::approx_size() const {
+	return map.size();
 }
 
 template <typename K, typename V>

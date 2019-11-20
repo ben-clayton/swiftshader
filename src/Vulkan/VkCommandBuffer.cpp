@@ -25,6 +25,10 @@
 #include "VkRenderPass.hpp"
 #include "Device/Renderer.hpp"
 
+#include "./Debug/Context.hpp"
+#include "./Debug/File.hpp"
+#include "./Debug/Thread.hpp"
+
 #include "marl/defer.h"
 
 #include <cstring>
@@ -1194,8 +1198,10 @@ private:
 	VkQueryResultFlags flags;
 };
 
-CommandBuffer::CommandBuffer(VkCommandBufferLevel pLevel) : level(pLevel)
+CommandBuffer::CommandBuffer(VkCommandBufferLevel pLevel, const std::shared_ptr<vk::dbg::Context>& dbgctx) : level(pLevel)
 {
+	dbg.ctx = dbgctx;
+
 	// FIXME (b/119409619): replace this vector by an allocator so we can control all memory allocations
 	commands = new std::vector<std::unique_ptr<Command> >();
 }
@@ -1241,12 +1247,14 @@ VkResult CommandBuffer::end()
 
 	state = EXECUTABLE;
 
-	auto ds = dbg::Server::get();
-	std::string source;
-	for(auto& command : *commands) {
-		source += command->description() + "\n";
+	if (dbg.ctx)
+	{
+		std::string source;
+		for(auto& command : *commands) {
+			source += command->description() + "\n";
+		}
+		dbg.file = dbg.ctx->lock().createVirtualFile("VkCommandBuffer", source.c_str());
 	}
-	file = ds->createVirtualFile("VkCommandBuffer", source.c_str());
 
 	return VK_SUCCESS;
 }
@@ -1664,20 +1672,27 @@ void CommandBuffer::submit(CommandBuffer::ExecutionState& executionState)
 	// Perform recorded work
 	state = PENDING;
 
-	auto dbgThread = dbg::Server::get()->currentThread();
-	dbgThread->setName("vkQueue processor");
-	dbgThread->enter(file, "vkCommandBuffer::submit");
-	defer(dbgThread->exit());
+	std::shared_ptr<vk::dbg::Thread> dbgThread;
+	if (dbg.ctx)
+	{
+		auto lock = dbg.ctx->lock();
+		dbgThread = lock.currentThread();
+		dbgThread->setName("vkQueue processor");
+		dbgThread->enter(lock, dbg.file, "vkCommandBuffer::submit");
+		lock.unlock();
+	}
 
 	int line = 1;
 	for(auto& command : *commands)
 	{
-		dbg::Server::get()->currentThread()->update({line++, file});
+		if (dbgThread) { dbgThread->update({line++, dbg.file}); }
 		command->play(executionState);
 	}
 
 	// After work is completed
 	state = EXECUTABLE;
+
+	if (dbgThread) { dbgThread->exit(); }
 }
 
 void CommandBuffer::submitSecondary(CommandBuffer::ExecutionState& executionState) const

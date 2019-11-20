@@ -29,7 +29,10 @@
 #include <spirv/unified1/spirv.hpp>
 #include <spirv/unified1/GLSL.std.450.h>
 
-#include "Vulkan/Debug/Server.hpp"
+#include "Vulkan/Debug/Context.hpp"
+#include "Vulkan/Debug/File.hpp"
+#include "Vulkan/Debug/Thread.hpp"
+#include "Vulkan/Debug/Variable.hpp"
 
 #include "marl/defer.h"
 
@@ -391,7 +394,7 @@ namespace
 		static Ptr create(const sw::SpirvShader* shader, const char* name) { return rr::Call(Ctx::create, rr::ConstantPointer(shader), name); }
 		static void destroy(Ptr ptr) { return rr::Call(Ctx::destroy, ptr); }
 
-		void update(int line, vk::dbg::File::Id file) { rr::Call(&Ctx::update, ctx, line, file); }
+		void update(int line, vk::dbg::File::ID file) { rr::Call(&Ctx::update, ctx, line, file); }
 
 		void updateActiveLaneMask(int lane, rr::Int enabled) { rr::Call(&Ctx::updateActiveLaneMask, ctx, lane, enabled != 0); }
 
@@ -409,15 +412,16 @@ namespace
 		public:
 
 			static Ctx* create(const sw::SpirvShader* shader, const char* stackBase) {
-				return new Ctx(shader, stackBase);
+				auto lock = shader->dbg.ctx->lock();
+				return new Ctx(shader, stackBase, lock);
 			}
 
 			static void destroy(Ctx* context) {
 				delete context;
 			}
 
-			void enter(const char* name) {
-				thread->enter(shader->spirvFile, name);
+			void enter(vk::dbg::Context::Lock& lock, const char* name) {
+				thread->enter(lock, shader->dbg.spirvFile, name);
 			}
 
 			void exit() {
@@ -428,8 +432,9 @@ namespace
 				registersByLane[lane]->put("enabled", vk::dbg::make_constant(enabled));
 			}
 
-			void update(int line, vk::dbg::File::Id file) {
-				thread->update({line, server->file(file)});
+			void update(int line, vk::dbg::File::ID fileID) {
+				auto file = ctx->lock().get(fileID);
+				thread->update({line, file});
 			}
 
 			vk::dbg::VariableContainer* registers() { return thread->registers().get(); }
@@ -440,7 +445,7 @@ namespace
 
 			template<typename K>
 			vk::dbg::VariableContainer* group(vk::dbg::VariableContainer* vc, K key) {
-				auto out = server->createVariableContainer();
+				auto out = ctx->lock().createVariableContainer();
 				vc->put(tostring(key), out);
 				return out.get();
 			}
@@ -458,16 +463,16 @@ namespace
 			static std::string tostring(const char* s) { return s; }
 			static std::string tostring(sw::SpirvShader::Object::ID id) { return "%" + std::to_string(id.value()); }
 
-			Ctx(const sw::SpirvShader* shader, const char* stackBase)
+			Ctx(const sw::SpirvShader* shader, const char* stackBase, vk::dbg::Context::Lock& lock)
 				: shader(shader)
-				, server(vk::dbg::Server::get())
-				, thread(server->currentThread()) {
+				, ctx(shader->dbg.ctx)
+				, thread(lock.currentThread()) {
 
-				enter(stackBase);
+				enter(lock, stackBase);
 				for (int i = 0; i < sw::SIMD::Width; i++) {
 					auto name = "Lane " + std::to_string(i);
-					registersByLane[i] = server->createVariableContainer();
-					localsByLane[i] = server->createVariableContainer();
+					registersByLane[i] = lock.createVariableContainer();
+					localsByLane[i] = lock.createVariableContainer();
 					thread->registers()->put(name.c_str(), registersByLane[i]);
 					thread->locals()->put(name.c_str(), localsByLane[i]);
 				}
@@ -478,7 +483,7 @@ namespace
 			}
 
 			const sw::SpirvShader* shader;
-			const std::shared_ptr<vk::dbg::Server> server;
+			const std::shared_ptr<vk::dbg::Context> ctx;
 			const std::shared_ptr<vk::dbg::Thread> thread;
 			std::array<std::shared_ptr<vk::dbg::VariableContainer>, sw::SIMD::Width> registersByLane;
 			std::array<std::shared_ptr<vk::dbg::VariableContainer>, sw::SIMD::Width> localsByLane;
@@ -493,6 +498,13 @@ namespace rr {
 	{
 		using type = rr::Int;
 		static rr::Int cast(sw::SpirvShader::Object::ID id) { return rr::Int(id.value()); }
+	};
+
+	template<typename T>
+	struct CToReactor<vk::dbg::ID<T>>
+	{
+		using type = rr::Int;
+		static rr::Int cast(vk::dbg::ID<T> id) { return rr::Int(id.value()); }
 	};
 
 	template<>
@@ -705,13 +717,16 @@ namespace sw
 			InsnStore const &insns,
 			const vk::RenderPass *renderPass,
 			uint32_t subpassIndex,
-			bool robustBufferAccess)
+			bool robustBufferAccess,
+			const std::shared_ptr<vk::dbg::Context>& dbgctx)
 				: insns{insns}, inputs{MAX_INTERFACE_COMPONENTS},
 				  outputs{MAX_INTERFACE_COMPONENTS},
 				  codeSerialID(codeSerialID),
 				  robustBufferAccess(robustBufferAccess)
 	{
 		ASSERT(insns.size() > 0);
+
+		dbg.ctx = dbgctx;
 
 		if (renderPass)
 		{
@@ -1108,9 +1123,12 @@ namespace sw
 				break;
 			case spv::OpLine:
 			{
-				auto path = getString(insn.word(1));
-				if (files.count(path) == 0) {
-					files.emplace(path, vk::dbg::Server::get()->createPhysicalFile(path.c_str()));
+				if (dbg.ctx)
+				{
+					auto path = getString(insn.word(1));
+					if (dbg.files.count(path) == 0) {
+						dbg.files.emplace(path, dbg.ctx->lock().createPhysicalFile(path.c_str()));
+					}
 				}
 				break;
 			}
@@ -1355,31 +1373,34 @@ namespace sw
 		}
 
 		// >> DEBUGSERVER
-		int currentLine = 1;
-		std::string source;
-		for (auto insn : *this) {
-			auto instruction = spvtools::spvInstructionBinaryToText(
-				SPV_ENV_VULKAN_1_1,
-				insn.wordPointer(0),
-				insn.wordCount(),
-				insns.data(),
-				insns.size(),
-				SPV_BINARY_TO_TEXT_OPTION_NO_HEADER) + "\n";
-			spirvLineMappings[insn.wordPointer(0)] = currentLine;
-			currentLine += std::count(instruction.begin(), instruction.end(), '\n');
-			source += instruction;
-		}
-		std::string name;
-		switch (executionModel)
+		if (dbg.ctx)
 		{
-			case spv::ExecutionModelVertex:    name = "VertexShader";   break;
-			case spv::ExecutionModelFragment:  name = "FragmentShader"; break;
-			case spv::ExecutionModelGLCompute: name = "ComputeShader";  break;
-			default: name = "SPIR-V Shader"; break;
+			int currentLine = 1;
+			std::string source;
+			for (auto insn : *this) {
+				auto instruction = spvtools::spvInstructionBinaryToText(
+					SPV_ENV_VULKAN_1_1,
+					insn.wordPointer(0),
+					insn.wordCount(),
+					insns.data(),
+					insns.size(),
+					SPV_BINARY_TO_TEXT_OPTION_NO_HEADER) + "\n";
+				dbg.spirvLineMappings[insn.wordPointer(0)] = currentLine;
+				currentLine += std::count(instruction.begin(), instruction.end(), '\n');
+				source += instruction;
+			}
+			std::string name;
+			switch (executionModel)
+			{
+				case spv::ExecutionModelVertex:    name = "VertexShader";   break;
+				case spv::ExecutionModelFragment:  name = "FragmentShader"; break;
+				case spv::ExecutionModelGLCompute: name = "ComputeShader";  break;
+				default: name = "SPIR-V Shader"; break;
+			}
+			static std::atomic<int> id = { 0 };
+			name += std::to_string(id++) + ".spvasm";
+			dbg.spirvFile = dbg.ctx->lock().createVirtualFile(name.c_str(), source.c_str());
 		}
-		static std::atomic<int> id = { 0 };
-		name += std::to_string(id++) + ".spvasm";
-		spirvFile = vk::dbg::Server::get()->createVirtualFile(name.c_str(), source.c_str());
 		// << DEBUGSERVER
 	}
 
@@ -1725,13 +1746,6 @@ namespace sw
 	template<typename F>
 	void SpirvShader::VisitMemoryObjectInner(sw::SpirvShader::Type::ID id, sw::SpirvShader::Decorations d, uint32_t& index, uint32_t offset, F f) const
 	{
-		// Walk a type tree in an explicitly laid out storage class, calling
-		// a functor for each scalar element within the object.
-
-		// The functor's first parameter is the index of the scalar element;
-		// the second parameter is the offset (in bytes) from the base of the
-		// object.
-
 		ApplyDecorationsForId(&d, id);
 		auto const &type = getType(id);
 
@@ -1748,7 +1762,8 @@ namespace sw
 			break;
 		case spv::OpTypeInt:
 		case spv::OpTypeFloat:
-			f(index++, offset);
+		case spv::OpTypeRuntimeArray:
+			f(MemoryElement{index++, offset, type});
 			break;
 		case spv::OpTypeVector:
 		{
@@ -1807,9 +1822,11 @@ namespace sw
 		else
 		{
 			// Objects without explicit layout are tightly packed.
-			for (auto i = 0u; i < getType(type.element).sizeInComponents; i++)
+			auto &elType = getType(type.element);
+			for (auto index = 0u; index < elType.sizeInComponents; index++)
 			{
-				f(i, i * sizeof(float));
+				auto offset = static_cast<uint32_t>(index * sizeof(float));
+				f({index, offset, elType});
 			}
 		}
 	}
@@ -2382,22 +2399,27 @@ namespace sw
 
 	// >> DEBUGSERVER
 	void SpirvShader::dbgLine(String path, uint32_t line, uint32_t column, EmitState *state) const {
-		auto ds = vk::dbg::Server::get();
-		auto file = files.at(path);
-		DC(state->routine->debugContext).update(line, file->id);
+		if (dbg.ctx)
+		{
+			auto file = dbg.files.at(path);
+			DC(state->routine->dbg.ctx).update(line, file->id);
+		}
 	}
 
 	void SpirvShader::dbgExposeIntermediate(Object::ID id, EmitState *state) const {
-		dbgExposeVariable<Object::ID>(id, id, state);
-		auto nameIt = names.find(id);
-		if (nameIt != names.end()) {
-			dbgExposeVariable<const char*>(nameIt->second.c_str(), id, state);
+		if (dbg.ctx)
+		{
+			dbgExposeVariable<Object::ID>(id, id, state);
+			auto nameIt = names.find(id);
+			if (nameIt != names.end()) {
+				dbgExposeVariable<const char*>(nameIt->second.c_str(), id, state);
+			}
 		}
 	}
 
 	template<typename Key>
 	void SpirvShader::dbgExposeVariable(const Key& key, Object::ID id, EmitState *state) const {
-		auto ctx = DC(state->routine->debugContext);
+		auto ctx = DC(state->routine->dbg.ctx);
 		GenericValue val(this, state, id);
 		for (int l = 0; l < SIMD::Width; l++) {
 			auto lane = ctx.localsLane(l);
@@ -2438,11 +2460,11 @@ namespace sw
 				bool interleavedByLane = IsStorageInterleavedByLane(objectTy.storageClass);
 				auto ptr = state->getPointer(id);
 				auto group = lane.group<Key>(key);
-				VisitMemoryObject(id, [&](uint32_t i, uint32_t offset) {
-					auto p = ptr + offset;
+				VisitMemoryObject(id, [&](const MemoryElement& el) {
+					auto p = ptr + el.offset;
 					if (interleavedByLane) { p = interleaveByLane(p); }  // TODO: Interleave once, then add offset?
 					auto simd = SIMD::Load<SIMD::Float>(p, sw::OutOfBoundsBehavior::Nullify, state->activeLaneMask());
-					group.template put<int, float>(i, Extract(simd, l));
+					group.template put<int, float>(el.index, Extract(simd, l));
 				});
 				break;
 			}
@@ -2458,71 +2480,72 @@ namespace sw
 		EmitState state(routine, entryPoint, activeLaneMask, storesAndAtomicsMask, descriptorSets, robustBufferAccess, executionModel);
 
 		// >> DEBUGSERVER
-		auto type = "SPIR-V";
-		switch (executionModel)
+		if (dbg.ctx)
 		{
-			case spv::ExecutionModelVertex:    type = "VertexShader";   break;
-			case spv::ExecutionModelFragment:  type = "FragmentShader"; break;
-			case spv::ExecutionModelGLCompute: type = "ComputeShader";  break;
-			default: type = "SPIR-V Shader"; break;
-		}
-		routine->debugContext = DC::create(this, type);
-		defer(DC::destroy(routine->debugContext));
-
-		auto ctx = DC(routine->debugContext);
-		state.setActiveLaneMask(activeLaneMask);
-
-		auto locals = ctx.locals();
-		locals.put<const char*, int>("subgroupSize", routine->invocationsPerSubgroup);
-
-		switch (executionModel) {
-		case spv::ExecutionModelGLCompute:
-			locals.putVec3<const char*, int>("numWorkgroups", routine->numWorkgroups);
-			locals.putVec3<const char*, int>("workgroupID", routine->workgroupID);
-			locals.putVec3<const char*, int>("workgroupSize", routine->workgroupSize);
-			locals.put<const char*, int>("numSubgroups", routine->subgroupsPerWorkgroup);
-			locals.put<const char*, int>("subgroupIndex", routine->subgroupIndex);
-
-			for (int i = 0; i < SIMD::Width; i++) {
-				auto lane = ctx.localsLane(i);
-				lane.put<const char*, int>("globalInvocationId",
-					rr::Extract(routine->globalInvocationID[0], i),
-					rr::Extract(routine->globalInvocationID[1], i),
-					rr::Extract(routine->globalInvocationID[2], i));
-				lane.put<const char*, int>("localInvocationId",
-					rr::Extract(routine->localInvocationID[0], i),
-					rr::Extract(routine->localInvocationID[1], i),
-					rr::Extract(routine->localInvocationID[2], i));
-				lane.put<const char*, int>("localInvocationIndex", rr::Extract(routine->localInvocationIndex, i));
+			auto type = "SPIR-V";
+			switch (executionModel)
+			{
+				case spv::ExecutionModelVertex:    type = "VertexShader";   break;
+				case spv::ExecutionModelFragment:  type = "FragmentShader"; break;
+				case spv::ExecutionModelGLCompute: type = "ComputeShader";  break;
+				default: type = "SPIR-V Shader"; break;
 			}
-			break;
+			routine->dbg.ctx = DC::create(this, type);
 
-		case spv::ExecutionModelFragment:
-			locals.put<const char*, int>("viewIndex", routine->viewID);
-			for (int i = 0; i < SIMD::Width; i++) {
-				auto lane = ctx.localsLane(i);
-				lane.put<const char*, float>("fragCoord",
-					rr::Extract(routine->fragCoord[0], i),
-					rr::Extract(routine->fragCoord[1], i),
-					rr::Extract(routine->fragCoord[2], i),
-					rr::Extract(routine->fragCoord[3], i));
-				lane.put<const char*, float>("pointCoord",
-					rr::Extract(routine->pointCoord[0], i),
-					rr::Extract(routine->pointCoord[1], i));
-				lane.put<const char*, int>("windowSpacePosition",
-					rr::Extract(routine->windowSpacePosition[0], i),
-					rr::Extract(routine->windowSpacePosition[1], i));
-				lane.put<const char*, int>("helperInvocation", rr::Extract(routine->helperInvocation, i));
+			auto ctx = DC(routine->dbg.ctx);
+			state.setActiveLaneMask(activeLaneMask, dbg.ctx);
+
+			auto locals = ctx.locals();
+			locals.put<const char*, int>("subgroupSize", routine->invocationsPerSubgroup);
+
+			switch (executionModel) {
+			case spv::ExecutionModelGLCompute:
+				locals.putVec3<const char*, int>("numWorkgroups", routine->numWorkgroups);
+				locals.putVec3<const char*, int>("workgroupID", routine->workgroupID);
+				locals.putVec3<const char*, int>("workgroupSize", routine->workgroupSize);
+				locals.put<const char*, int>("numSubgroups", routine->subgroupsPerWorkgroup);
+				locals.put<const char*, int>("subgroupIndex", routine->subgroupIndex);
+
+				for (int i = 0; i < SIMD::Width; i++) {
+					auto lane = ctx.localsLane(i);
+					lane.put<const char*, int>("globalInvocationId",
+						rr::Extract(routine->globalInvocationID[0], i),
+						rr::Extract(routine->globalInvocationID[1], i),
+						rr::Extract(routine->globalInvocationID[2], i));
+					lane.put<const char*, int>("localInvocationId",
+						rr::Extract(routine->localInvocationID[0], i),
+						rr::Extract(routine->localInvocationID[1], i),
+						rr::Extract(routine->localInvocationID[2], i));
+					lane.put<const char*, int>("localInvocationIndex", rr::Extract(routine->localInvocationIndex, i));
+				}
+				break;
+
+			case spv::ExecutionModelFragment:
+				locals.put<const char*, int>("viewIndex", routine->viewID);
+				for (int i = 0; i < SIMD::Width; i++) {
+					auto lane = ctx.localsLane(i);
+					lane.put<const char*, float>("fragCoord",
+						rr::Extract(routine->fragCoord[0], i),
+						rr::Extract(routine->fragCoord[1], i),
+						rr::Extract(routine->fragCoord[2], i),
+						rr::Extract(routine->fragCoord[3], i));
+					lane.put<const char*, float>("pointCoord",
+						rr::Extract(routine->pointCoord[0], i),
+						rr::Extract(routine->pointCoord[1], i));
+					lane.put<const char*, int>("windowSpacePosition",
+						rr::Extract(routine->windowSpacePosition[0], i),
+						rr::Extract(routine->windowSpacePosition[1], i));
+					lane.put<const char*, int>("helperInvocation", rr::Extract(routine->helperInvocation, i));
+				}
+				break;
+
+			case spv::ExecutionModelVertex:
+				break;
+
+			default:
+				break;
 			}
-			break;
-
-		case spv::ExecutionModelVertex:
-			break;
-
-		default:
-			break;
 		}
-
 		// << DEBUGSERVER
 
 
@@ -2539,6 +2562,13 @@ namespace sw
 
 		// Emit all the blocks starting from entryPoint.
 		EmitBlocks(getFunction(entryPoint).entry, &state);
+
+		// >> DEBUGSERVER
+		if (dbg.ctx)
+		{
+			DC::destroy(routine->dbg.ctx);
+		}
+		// << DEBUGSERVER
 	}
 
 	void SpirvShader::EmitBlocks(Block::ID id, EmitState *state, Block::ID ignore /* = 0 */) const
@@ -2640,7 +2670,7 @@ namespace sw
 				auto inMask = GetActiveLaneMaskEdge(state, in, blockId);
 				activeLaneMask |= inMask;
 			}
-			state->setActiveLaneMask(activeLaneMask);
+			state->setActiveLaneMask(activeLaneMask, dbg.ctx);
 		}
 
 		EmitInstructions(block.begin(), block.end(), state);
@@ -2717,7 +2747,7 @@ namespace sw
 		Nucleus::setInsertBlock(headerBasicBlock);
 
 		// Load the active lane mask.
-		state->setActiveLaneMask(loopActiveLaneMask);
+		state->setActiveLaneMask(loopActiveLaneMask, dbg.ctx);
 
 		// Emit the non-phi loop header block's instructions.
 		for (auto insn = block.begin(); insn != block.end(); insn++)
@@ -2821,8 +2851,11 @@ namespace sw
 	SpirvShader::EmitResult SpirvShader::EmitInstruction(InsnIterator insn, EmitState *state) const
 	{
 		// >> DEBUGSERVER
-		auto line = spirvLineMappings.at(insn.wordPointer(0));
-		DC(state->routine->debugContext).update(line, spirvFile->id);
+		if (dbg.ctx)
+		{
+			auto line = dbg.spirvLineMappings.at(insn.wordPointer(0));
+			DC(state->routine->dbg.ctx).update(line, dbg.spirvFile->id);
+		}
 		// << DEBUGSERVER
 
 		auto opcode = insn.opcode();
@@ -3304,12 +3337,12 @@ namespace sw
 				bool interleavedByLane = IsStorageInterleavedByLane(objectTy.storageClass);
 				auto ptr = GetPointerToData(resultId, 0, state);
 				GenericValue initialValue(this, state, initializerId);
-				VisitMemoryObject(resultId, [&](uint32_t i, uint32_t offset)
+				VisitMemoryObject(resultId, [&](const MemoryElement& el)
 				{
-					auto p = ptr + offset;
+					auto p = ptr + el.offset;
 					if (interleavedByLane) { p = interleaveByLane(p); }
 					auto robustness = OutOfBoundsBehavior::UndefinedBehavior;  // Local variables are always within bounds.
-					SIMD::Store(p, initialValue.Float(i), robustness, state->activeLaneMask());
+					SIMD::Store(p, initialValue.Float(el.index), robustness, state->activeLaneMask());
 				});
 				break;
 			}
@@ -3360,11 +3393,11 @@ namespace sw
 		auto &dst = state->createIntermediate(resultId, resultTy.sizeInComponents);
 		auto robustness = state->getOutOfBoundsBehavior(pointerTy.storageClass);
 
-		VisitMemoryObject(pointerId, [&](uint32_t i, uint32_t offset)
+		VisitMemoryObject(pointerId, [&](const MemoryElement& el)
 		{
-			auto p = ptr + offset;
+			auto p = ptr + el.offset;
 			if (interleavedByLane) { p = interleaveByLane(p); }  // TODO: Interleave once, then add offset?
-			dst.move(i, SIMD::Load<SIMD::Float>(p, robustness, state->activeLaneMask(), atomic, memoryOrder));
+			dst.move(el.index, SIMD::Load<SIMD::Float>(p, robustness, state->activeLaneMask(), atomic, memoryOrder));
 		});
 
 		return EmitResult::Continue;
@@ -3404,22 +3437,22 @@ namespace sw
 		{
 			// Constant source data.
 			const uint32_t *src = object.constantValue.get();
-			VisitMemoryObject(pointerId, [&](uint32_t i, uint32_t offset)
+			VisitMemoryObject(pointerId, [&](const MemoryElement& el)
 			{
-				auto p = ptr + offset;
+				auto p = ptr + el.offset;
 				if (interleavedByLane) { p = interleaveByLane(p); }
-				SIMD::Store(p, SIMD::Int(src[i]), robustness, mask, atomic, memoryOrder);
+				SIMD::Store(p, SIMD::Int(src[el.index]), robustness, mask, atomic, memoryOrder);
 			});
 		}
 		else
 		{
 			// Intermediate source data.
 			auto &src = state->getIntermediate(objectId);
-			VisitMemoryObject(pointerId, [&](uint32_t i, uint32_t offset)
+			VisitMemoryObject(pointerId, [&](const MemoryElement& el)
 			{
-				auto p = ptr + offset;
+				auto p = ptr + el.offset;
 				if (interleavedByLane) { p = interleaveByLane(p); }
-				SIMD::Store(p, src.Float(i), robustness, mask, atomic, memoryOrder);
+				SIMD::Store(p, src.Float(el.index), robustness, mask, atomic, memoryOrder);
 			});
 		}
 
@@ -5238,20 +5271,20 @@ namespace sw
 	SpirvShader::EmitResult SpirvShader::EmitUnreachable(InsnIterator insn, EmitState *state) const
 	{
 		// TODO: Log something in this case?
-		state->setActiveLaneMask(SIMD::Int(0));
+		state->setActiveLaneMask(SIMD::Int(0), dbg.ctx);
 		return EmitResult::Terminator;
 	}
 
 	SpirvShader::EmitResult SpirvShader::EmitReturn(InsnIterator insn, EmitState *state) const
 	{
-		state->setActiveLaneMask(SIMD::Int(0));
+		state->setActiveLaneMask(SIMD::Int(0), dbg.ctx);
 		return EmitResult::Terminator;
 	}
 
 	SpirvShader::EmitResult SpirvShader::EmitKill(InsnIterator insn, EmitState *state) const
 	{
 		state->routine->killMask |= SignMask(state->activeLaneMask());
-		state->setActiveLaneMask(SIMD::Int(0));
+		state->setActiveLaneMask(SIMD::Int(0), dbg.ctx);
 		return EmitResult::Terminator;
 	}
 
@@ -6444,13 +6477,14 @@ namespace sw
 
 		std::unordered_map<uint32_t, uint32_t> srcOffsets;
 
-		VisitMemoryObject(srcPtrId, [&](uint32_t i, uint32_t srcOffset) { srcOffsets[i] = srcOffset; });
+		VisitMemoryObject(srcPtrId, [&](const MemoryElement& el) { srcOffsets[el.index] = el.offset; });
 
-		VisitMemoryObject(dstPtrId, [&](uint32_t i, uint32_t dstOffset)
+		VisitMemoryObject(dstPtrId, [&](const MemoryElement& el)
 		{
-			auto it = srcOffsets.find(i);
+			auto it = srcOffsets.find(el.index);
 			ASSERT(it != srcOffsets.end());
 			auto srcOffset = it->second;
+			auto dstOffset = el.offset;
 
 			auto dst = dstPtr + dstOffset;
 			auto src = srcPtr + srcOffset;
@@ -7309,13 +7343,16 @@ namespace sw
 		}
 	}
 
-	void SpirvShader::EmitState::setActiveLaneMask(RValue<SIMD::Int> mask)
+	void SpirvShader::EmitState::setActiveLaneMask(RValue<SIMD::Int> mask, const std::shared_ptr<vk::dbg::Context>& dbgctx)
 	{
 		activeLaneMaskValue = mask.value;
 
 		// >> DEBUGSERVER
-		for (int lane = 0; lane < SIMD::Width; lane++) {
-			DC(routine->debugContext).updateActiveLaneMask(lane, rr::Extract(mask, lane));
+		if (dbgctx)
+		{
+			for (int lane = 0; lane < SIMD::Width; lane++) {
+				DC(routine->dbg.ctx).updateActiveLaneMask(lane, rr::Extract(mask, lane));
+			}
 		}
 		// << DEBUGSERVER
 	}
