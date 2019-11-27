@@ -278,6 +278,7 @@ std::shared_ptr<Frame> Context::Lock::createFrame(
 	frame->arguments = createScope(file);
 	frame->locals = createScope(file);
 	frame->registers = createScope(file);
+	frame->hovers = createScope(file);
 	return frame;
 }
 

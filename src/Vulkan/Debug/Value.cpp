@@ -21,7 +21,15 @@ namespace vk
 namespace dbg
 {
 
-std::string Value::string() const
+const FormatFlags FormatFlags::Default = {
+	"[",                   // listPrefix
+	"]",                   // listSuffix
+	", ",                  // listDelimiter
+	"",                    // listIndent
+	&FormatFlags::Default, // subListFmt
+};
+
+std::string Value::string(const FormatFlags& fmt /* = FormatFlags::Default */) const
 {
 	switch(type()->kind)
 	{
@@ -52,16 +60,18 @@ std::string Value::string() const
 	case Kind::VariableContainer:
 		auto const* vc = static_cast<const VariableContainer*>(this);
 		std::string out = "";
+		auto subfmt = *fmt.subListFmt;
+		subfmt.listIndent = fmt.listIndent + fmt.subListFmt->listIndent;
+		bool first = true;
 		vc->foreach(0, [&](const Variable& var) {
-			if(out.size() > 0)
-			{
-				out += ", ";
-			}
+			if(!first) { out += fmt.listDelimiter; }
+			first = false;
+			out += fmt.listIndent;
 			out += var.name;
 			out += ": ";
-			out += var.value->string();
+			out += var.value->string(subfmt);
 		});
-		return "[" + out + "]";
+		return fmt.listPrefix + out + fmt.listSuffix;
 	}
 	return "";
 }

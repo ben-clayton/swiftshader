@@ -41,6 +41,9 @@
 #include <unordered_set>
 #include <vector>
 
+#include "Vulkan/Debug/Context.hpp"
+#include "Vulkan/Debug/File.hpp"
+
 #undef Yield // b/127920555
 
 namespace vk
@@ -53,8 +56,8 @@ namespace vk
 
 namespace dbg
 {
-	class Context;
-	class File;
+	class Thread;
+	class VariableContainer;
 } // namespace vk::dbg
 
 } // namespace vk
@@ -1172,6 +1175,100 @@ namespace sw
 			SpirvShader::Type::ID const type;
 		};
 
+		// >> DEBUGSERVER
+		class DC {
+		public:
+			using Ptr = rr::Pointer<rr::Byte>;
+
+			class Group {
+			public:
+				Group(Ptr ctx, Ptr group);
+
+				template<typename K, typename RK>
+				Group group(RK key);
+
+				template<typename K, typename V, typename RK, typename RV>
+				void put(RK key, RV value);
+
+				template<typename K, typename V, typename RK, typename RV>
+				void put(RK key, RV x, RV y);
+
+				template<typename K, typename V, typename RK, typename RV>
+				void put(RK key, RV x, RV y, RV z);
+
+				template<typename K, typename V, typename RK, typename RV>
+				void put(RK key, RV x, RV y, RV z, RV w);
+
+				template<typename K, typename V, typename VEC>
+				void putVec3(K key, const VEC& v);
+
+			private:
+				Ptr ctx;
+				Ptr ptr;
+			};
+
+			DC(Ptr ctx);
+
+			static Ptr create(const sw::SpirvShader* shader, const char* name);
+			static void destroy(Ptr ptr);
+
+			void update(int line, vk::dbg::File::ID file);
+
+			void updateActiveLaneMask(int lane, rr::Int enabled);
+
+			Group registers();
+			Group locals();
+			Group hovers();
+
+			Group registersLane(uint32_t lane);
+			Group localsLane(uint32_t lane);
+
+		private:
+			Ptr ctx;
+
+			class Ctx {
+			public:
+
+				static Ctx* create(const sw::SpirvShader* shader, const char* stackBase);
+				static void destroy(Ctx* context);
+				void enter(vk::dbg::Context::Lock& lock, const char* name);
+				void exit();
+				void updateActiveLaneMask(int lane, bool enabled);
+				void update(int line, vk::dbg::File::ID fileID);
+
+				vk::dbg::VariableContainer* registers();
+				vk::dbg::VariableContainer* locals();
+				vk::dbg::VariableContainer* hovers();
+
+				vk::dbg::VariableContainer* registersLane(int i);
+				vk::dbg::VariableContainer* localsLane(int i);
+
+				template<typename K>
+				vk::dbg::VariableContainer* group(vk::dbg::VariableContainer* vc, K key);
+
+				template<typename K, typename V>
+				void put(vk::dbg::VariableContainer* vc, K key, V value);
+
+			private:
+				static std::string regname(int reg);
+
+				template<typename T>
+				static std::string tostring(const T& s);
+				static std::string tostring(const char* s);
+				static std::string tostring(sw::SpirvShader::Object::ID id);
+
+				Ctx(const sw::SpirvShader* shader, const char* stackBase, vk::dbg::Context::Lock& lock);
+				~Ctx();
+
+				const SpirvShader* shader;
+				const std::shared_ptr<vk::dbg::Context> ctx;
+				const std::shared_ptr<vk::dbg::Thread> thread;
+				std::array<std::shared_ptr<vk::dbg::VariableContainer>, SIMD::Width> registersByLane;
+				std::array<std::shared_ptr<vk::dbg::VariableContainer>, SIMD::Width> localsByLane;
+			};
+		};
+		// << DEBUGSERVER
+
 		Type const &getType(Type::ID id) const
 		{
 			auto it = types.find(id);
@@ -1339,7 +1436,9 @@ namespace sw
 
 		template<typename Key>
 		void dbgExposeVariable(const Key& key, Object::ID id, EmitState *state) const;
-
+		
+		template<typename Key>
+		void dbgExposeVariable(DC::Group& group, int lane, const Key& key, const GenericValue& val, Object::ID id, EmitState *state) const;
 	};
 
 	class SpirvRoutine

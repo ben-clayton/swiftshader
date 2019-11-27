@@ -66,6 +66,7 @@ public:
 	std::shared_ptr<Scope> arguments;
 	std::shared_ptr<Scope> locals;
 	std::shared_ptr<Scope> registers;
+	std::shared_ptr<Scope> hovers;
 };
 
 Frame::Frame(ID id) :
@@ -92,6 +93,7 @@ public:
 	std::shared_ptr<VariableContainer> registers() const;
 	std::shared_ptr<VariableContainer> locals() const;
 	std::shared_ptr<VariableContainer> arguments() const;
+	std::shared_ptr<VariableContainer> hovers() const;
 	std::vector<std::shared_ptr<Frame>> stack() const;
 	State getState() const;
 	void resume();

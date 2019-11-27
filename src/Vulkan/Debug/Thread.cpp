@@ -117,6 +117,12 @@ std::shared_ptr<VariableContainer> Thread::arguments() const
 	return frames.back()->arguments->variables;
 }
 
+std::shared_ptr<VariableContainer> Thread::hovers() const
+{
+	std::unique_lock<std::mutex> lock(mutex);
+	return frames.back()->hovers->variables;
+}
+
 std::vector<std::shared_ptr<Frame>> Thread::stack() const
 {
 	std::unique_lock<std::mutex> lock(mutex);

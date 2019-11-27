@@ -24,12 +24,22 @@ namespace dbg
 
 class Type;
 
+struct FormatFlags
+{
+	static const FormatFlags Default;
+	std::string listPrefix;
+	std::string listSuffix;
+	std::string listDelimiter;
+	std::string listIndent;
+	const FormatFlags* subListFmt;
+};
+
 class Value
 {
 public:
 	virtual ~Value() = default;
 	virtual std::shared_ptr<Type> type() const = 0;
-	virtual std::string string() const;
+	virtual std::string string(const FormatFlags& = FormatFlags::Default) const;
 	virtual const void* get() const = 0;
 	virtual bool set(void* ptr) { return false; }
 };

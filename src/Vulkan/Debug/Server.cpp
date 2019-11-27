@@ -70,6 +70,7 @@ Server::Impl::Impl(const std::shared_ptr<Context>& context, int port) :
 		dap::InitializeResponse response;
 		response.supportsFunctionBreakpoints = true;
 		response.supportsConfigurationDoneRequest = true;
+		response.supportsEvaluateForHovers = true;
 		clientIsVisualStudio = (req.clientID.value("") == "visualstudio");
 		return response;
 	});
@@ -395,15 +396,42 @@ Server::Impl::Impl(const std::shared_ptr<Context>& context, int port) :
 			{
 				return dap::Error("Unknown frame %d", int(req.frameId.value()));
 			}
+			
+			auto fmt = FormatFlags::Default;
+			auto subfmt = FormatFlags::Default;
+
+			if (req.context.value("") == "hover")
+			{
+				subfmt.listPrefix = "\n";
+				subfmt.listSuffix = "";
+				subfmt.listDelimiter = "\n";
+				subfmt.listIndent = "  ";
+				fmt.listPrefix = "";
+				fmt.listSuffix = "";
+				fmt.listDelimiter = "\n";
+				fmt.listIndent = "";
+				fmt.subListFmt = &subfmt;
+			}
 
 			dap::EvaluateResponse response;
 			auto findHandler = [&](const Variable& var) {
-				response.result = var.value->string();
+				response.result = var.value->string(fmt);
 				response.type = var.value->type()->name();
 			};
 			if(frame->locals->variables->find(req.expression, findHandler) ||
 			   frame->arguments->variables->find(req.expression, findHandler) ||
-			   frame->registers->variables->find(req.expression, findHandler))
+			   frame->registers->variables->find(req.expression, findHandler) ||
+			   frame->hovers->variables->find(req.expression, findHandler))
+			{
+				return response;
+			}
+
+			// HACK: VSCode does not appear to include the % in %123 tokens
+			auto withPercent = "%" + req.expression;
+			if(frame->locals->variables->find(withPercent, findHandler) ||
+			   frame->arguments->variables->find(withPercent, findHandler) ||
+			   frame->registers->variables->find(withPercent, findHandler) ||
+			   frame->hovers->variables->find(withPercent, findHandler))
 			{
 				return response;
 			}

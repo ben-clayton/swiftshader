@@ -55,6 +55,7 @@ namespace
 {
 	constexpr float PI = 3.141592653589793f;
 
+	const char* laneNames[] = { "Lane 0", "Lane 1", "Lane 2", "Lane 3" };
 	rr::RValue<rr::Bool> AnyTrue(rr::RValue<sw::SIMD::Int> const &ints)
 	{
 		return rr::SignMask(ints) != 0;
@@ -332,164 +333,6 @@ namespace
 
 		return rr::As<sw::SIMD::Float>((linear & rr::As<sw::SIMD::Int>(lc)) | (~linear & rr::As<sw::SIMD::Int>(ec)));   // TODO: IfThenElse()
 	}
-
-	// >> DEBUGSERVER
-	class DC {
-	public:
-		using Ptr = rr::Pointer<rr::Byte>;
-
-		class Group {
-		public:
-			Group(Ptr ctx, Ptr group) : ctx(ctx), ptr(group) {}
-
-			template<typename K, typename RK>
-			Group group(RK key) { return Group(ctx, rr::Call(&Ctx::group<K>, ctx, ptr, key)); }
-
-			template<typename K, typename V, typename RK, typename RV>
-			void put(RK key, RV value) { rr::Call(&Ctx::put<K, V>, ctx, ptr, key, value); }
-
-			template<typename K, typename V, typename RK, typename RV>
-			void put(RK key, RV x, RV y)
-			{
-				auto vec = group<K>(key);
-				vec.template put<const char*, V>("x", x);
-				vec.template put<const char*, V>("y", y);
-			}
-
-			template<typename K, typename V, typename RK, typename RV>
-			void put(RK key, RV x, RV y, RV z)
-			{
-				auto vec = group<K>(key);
-				vec.template put<const char*, V>("x", x);
-				vec.template put<const char*, V>("y", y);
-				vec.template put<const char*, V>("z", z);
-			}
-
-			template<typename K, typename V, typename RK, typename RV>
-			void put(RK key, RV x, RV y, RV z, RV w)
-			{
-				auto vec = group<K>(key);
-				vec.template put<const char*, V>("x", x);
-				vec.template put<const char*, V>("y", y);
-				vec.template put<const char*, V>("z", z);
-				vec.template put<const char*, V>("w", w);
-			}
-
-			template<typename K, typename V, typename VEC>
-			void putVec3(K key, const VEC& v)
-			{
-				auto vec = group<K>(key);
-				vec.template put<const char*, V>("x", Extract(v, 0));
-				vec.template put<const char*, V>("y", Extract(v, 1));
-				vec.template put<const char*, V>("z", Extract(v, 2));
-			}
-
-		private:
-			Ptr ctx;
-			Ptr ptr;
-		};
-
-		DC(Ptr ctx) : ctx(ctx) {}
-
-		static Ptr create(const sw::SpirvShader* shader, const char* name) { return rr::Call(Ctx::create, rr::ConstantPointer(shader), name); }
-		static void destroy(Ptr ptr) { return rr::Call(Ctx::destroy, ptr); }
-
-		void update(int line, vk::dbg::File::ID file) { rr::Call(&Ctx::update, ctx, line, file); }
-
-		void updateActiveLaneMask(int lane, rr::Int enabled) { rr::Call(&Ctx::updateActiveLaneMask, ctx, lane, enabled != 0); }
-
-		Group registers() { return Group(ctx, rr::Call(&Ctx::registers, ctx)); }
-
-		Group locals() { return Group(ctx, rr::Call(&Ctx::locals, ctx)); }
-
-		Group registersLane(uint32_t lane) { return Group(ctx, rr::Call(&Ctx::registersLane, ctx, lane)); }
-		Group localsLane(uint32_t lane) { return Group(ctx, rr::Call(&Ctx::localsLane, ctx, lane)); }
-
-	private:
-		Ptr ctx;
-
-		class Ctx {
-		public:
-
-			static Ctx* create(const sw::SpirvShader* shader, const char* stackBase) {
-				auto lock = shader->dbg.ctx->lock();
-				return new Ctx(shader, stackBase, lock);
-			}
-
-			static void destroy(Ctx* context) {
-				delete context;
-			}
-
-			void enter(vk::dbg::Context::Lock& lock, const char* name) {
-				thread->enter(lock, shader->dbg.spirvFile, name);
-			}
-
-			void exit() {
-				thread->exit();
-			}
-
-			void updateActiveLaneMask(int lane, bool enabled) {
-				registersByLane[lane]->put("enabled", vk::dbg::make_constant(enabled));
-			}
-
-			void update(int line, vk::dbg::File::ID fileID) {
-				auto file = ctx->lock().get(fileID);
-				thread->update({line, file});
-			}
-
-			vk::dbg::VariableContainer* registers() { return thread->registers().get(); }
-			vk::dbg::VariableContainer* locals() { return thread->locals().get(); }
-
-			vk::dbg::VariableContainer* registersLane(int i) { return registersByLane[i].get(); }
-			vk::dbg::VariableContainer* localsLane(int i) { return localsByLane[i].get(); }
-
-			template<typename K>
-			vk::dbg::VariableContainer* group(vk::dbg::VariableContainer* vc, K key) {
-				auto out = ctx->lock().createVariableContainer();
-				vc->put(tostring(key), out);
-				return out.get();
-			}
-
-			template<typename K, typename V>
-			void put(vk::dbg::VariableContainer* vc, K key, V value) {
-				vc->put(tostring(key), vk::dbg::make_constant(value));
-			}
-
-		private:
-			static std::string regname(int reg) { return "%" + std::to_string(reg); }
-
-			template<typename T>
-			static std::string tostring(const T& s) { return std::to_string(s); }
-			static std::string tostring(const char* s) { return s; }
-			static std::string tostring(sw::SpirvShader::Object::ID id) { return "%" + std::to_string(id.value()); }
-
-			Ctx(const sw::SpirvShader* shader, const char* stackBase, vk::dbg::Context::Lock& lock)
-				: shader(shader)
-				, ctx(shader->dbg.ctx)
-				, thread(lock.currentThread()) {
-
-				enter(lock, stackBase);
-				for (int i = 0; i < sw::SIMD::Width; i++) {
-					auto name = "Lane " + std::to_string(i);
-					registersByLane[i] = lock.createVariableContainer();
-					localsByLane[i] = lock.createVariableContainer();
-					thread->registers()->put(name.c_str(), registersByLane[i]);
-					thread->locals()->put(name.c_str(), localsByLane[i]);
-				}
-			}
-
-			~Ctx() {
-				exit();
-			}
-
-			const sw::SpirvShader* shader;
-			const std::shared_ptr<vk::dbg::Context> ctx;
-			const std::shared_ptr<vk::dbg::Thread> thread;
-			std::array<std::shared_ptr<vk::dbg::VariableContainer>, sw::SIMD::Width> registersByLane;
-			std::array<std::shared_ptr<vk::dbg::VariableContainer>, sw::SIMD::Width> localsByLane;
-		};
-	};
-	// << DEBUGSERVER
 } // anonymous namespace
 
 namespace rr {
@@ -2410,10 +2253,10 @@ namespace sw
 		if (dbg.ctx)
 		{
 			dbgExposeVariable<Object::ID>(id, id, state);
-			auto nameIt = names.find(id);
-			if (nameIt != names.end()) {
-				dbgExposeVariable<const char*>(nameIt->second.c_str(), id, state);
-			}
+			// auto nameIt = names.find(id);
+			// if (nameIt != names.end()) {
+			// 	dbgExposeVariable<const char*>(nameIt->second.c_str(), id, state);
+			// }
 		}
 	}
 
@@ -2421,56 +2264,64 @@ namespace sw
 	void SpirvShader::dbgExposeVariable(const Key& key, Object::ID id, EmitState *state) const {
 		auto ctx = DC(state->routine->dbg.ctx);
 		GenericValue val(this, state, id);
+		auto var = ctx.hovers().group<Key>(key);
 		for (int l = 0; l < SIMD::Width; l++) {
 			auto lane = ctx.localsLane(l);
-			switch (getType(val.type).opcode()) {
-			case spv::OpTypeInt:
-				lane.put<Key, int>(key, Extract(val.Int(0), l));
-				break;
-			case spv::OpTypeFloat:
-				lane.put<Key, float>(key, Extract(val.Float(0), l));
-				break;
-			case spv::OpTypeVector: {
-				auto count = getType(val.type).definition.word(3);
-				switch (count) {
-					case 1:
-						lane.put<Key, float>(key, Extract(val.Float(0), l));
-						break;
-					case 2:
-						lane.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l));
-						break;
-					case 3:
-						lane.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l), Extract(val.Float(2), l));
-						break;
-					case 4:
-						lane.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l), Extract(val.Float(2), l), Extract(val.Float(3), l));
-						break;
-					default: {
-						auto vec = lane.group<Key>(key);
-						for (uint32_t i = 0; i < count; i++) {
-							vec.template put<int, float>(i, Extract(val.Float(i), l));
-						}
-						break;
+			dbgExposeVariable(lane, l, key, val, id, state);
+			dbgExposeVariable(var, l, laneNames[l], val, id, state);
+		}
+	}
+	
+	template<typename Key>
+	void SpirvShader::dbgExposeVariable(DC::Group& group, int l, const Key& key, const GenericValue& val, Object::ID id, EmitState *state) const {
+		auto ctx = DC(state->routine->dbg.ctx);
+		switch (getType(val.type).opcode()) {
+		case spv::OpTypeInt:
+			group.put<Key, int>(key, Extract(val.Int(0), l));
+			break;
+		case spv::OpTypeFloat:
+			group.put<Key, float>(key, Extract(val.Float(0), l));
+			break;
+		case spv::OpTypeVector: {
+			auto count = getType(val.type).definition.word(3);
+			switch (count) {
+				case 1:
+					group.put<Key, float>(key, Extract(val.Float(0), l));
+					break;
+				case 2:
+					group.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l));
+					break;
+				case 3:
+					group.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l), Extract(val.Float(2), l));
+					break;
+				case 4:
+					group.put<Key, float>(key, Extract(val.Float(0), l), Extract(val.Float(1), l), Extract(val.Float(2), l), Extract(val.Float(3), l));
+					break;
+				default: {
+					auto vec = group.group<Key>(key);
+					for (uint32_t i = 0; i < count; i++) {
+						vec.template put<int, float>(i, Extract(val.Float(i), l));
 					}
+					break;
 				}
-				break;
 			}
-			case spv::OpTypePointer: {
-				auto objectTy = getType(getObject(id).type);
-				bool interleavedByLane = IsStorageInterleavedByLane(objectTy.storageClass);
-				auto ptr = state->getPointer(id);
-				auto group = lane.group<Key>(key);
-				VisitMemoryObject(id, [&](const MemoryElement& el) {
-					auto p = ptr + el.offset;
-					if (interleavedByLane) { p = interleaveByLane(p); }  // TODO: Interleave once, then add offset?
-					auto simd = SIMD::Load<SIMD::Float>(p, sw::OutOfBoundsBehavior::Nullify, state->activeLaneMask());
-					group.template put<int, float>(el.index, Extract(simd, l));
-				});
-				break;
-			}
-			default:
-				break;
-			}
+			break;
+		}
+		case spv::OpTypePointer: {
+			auto objectTy = getType(getObject(id).type);
+			bool interleavedByLane = IsStorageInterleavedByLane(objectTy.storageClass);
+			auto ptr = state->getPointer(id);
+			auto ptrGroup = group.group<Key>(key);
+			VisitMemoryObject(id, [&](const MemoryElement& el) {
+				auto p = ptr + el.offset;
+				if (interleavedByLane) { p = interleaveByLane(p); }  // TODO: Interleave once, then add offset?
+				auto simd = SIMD::Load<SIMD::Float>(p, sw::OutOfBoundsBehavior::Nullify, state->activeLaneMask());
+				ptrGroup.template put<int, float>(el.index, Extract(simd, l));
+			});
+			break;
+		}
+		default:
+			break;
 		}
 	}
 	// << DEBUGSERVER
@@ -7461,4 +7312,173 @@ namespace sw
 		});
 	}
 
+
+	// >> DEBUGSERVER
+	SpirvShader::DC::Group::Group(Ptr ctx, Ptr group) : ctx(ctx), ptr(group) {}
+
+	template<typename K, typename RK>
+	SpirvShader::DC::Group SpirvShader::DC::Group::group(RK key)
+	{ 
+		return Group(ctx, rr::Call(&Ctx::group<K>, ctx, ptr, key));
+	}
+
+	template<typename K, typename V, typename RK, typename RV>
+	void SpirvShader::DC::Group::put(RK key, RV value)
+	{ 
+		rr::Call(&Ctx::put<K, V>, ctx, ptr, key, value);
+	}
+
+	template<typename K, typename V, typename RK, typename RV>
+	void SpirvShader::DC::Group::put(RK key, RV x, RV y)
+	{
+		auto vec = group<K>(key);
+		vec.template put<const char*, V>("x", x);
+		vec.template put<const char*, V>("y", y);
+	}
+
+	template<typename K, typename V, typename RK, typename RV>
+	void SpirvShader::DC::Group::put(RK key, RV x, RV y, RV z)
+	{
+		auto vec = group<K>(key);
+		vec.template put<const char*, V>("x", x);
+		vec.template put<const char*, V>("y", y);
+		vec.template put<const char*, V>("z", z);
+	}
+
+	template<typename K, typename V, typename RK, typename RV>
+	void SpirvShader::DC::Group::put(RK key, RV x, RV y, RV z, RV w)
+	{
+		auto vec = group<K>(key);
+		vec.template put<const char*, V>("x", x);
+		vec.template put<const char*, V>("y", y);
+		vec.template put<const char*, V>("z", z);
+		vec.template put<const char*, V>("w", w);
+	}
+
+	template<typename K, typename V, typename VEC>
+	void SpirvShader::DC::Group::putVec3(K key, const VEC& v)
+	{
+		auto vec = group<K>(key);
+		vec.template put<const char*, V>("x", Extract(v, 0));
+		vec.template put<const char*, V>("y", Extract(v, 1));
+		vec.template put<const char*, V>("z", Extract(v, 2));
+	}
+
+	SpirvShader::DC::DC(Ptr ctx) : ctx(ctx) {}
+
+	SpirvShader::DC::Ptr SpirvShader::DC::create(const sw::SpirvShader* shader, const char* name)
+	{ 
+		return rr::Call(Ctx::create, rr::ConstantPointer(shader), name);
+	}
+
+	void SpirvShader::DC::destroy(Ptr ptr)
+	{
+		return rr::Call(Ctx::destroy, ptr);
+	}
+
+	void SpirvShader::DC::update(int line, vk::dbg::File::ID file)
+	{
+		rr::Call(&Ctx::update, ctx, line, file);
+	}
+
+	void SpirvShader::DC::updateActiveLaneMask(int lane, rr::Int enabled)
+	{
+		rr::Call(&Ctx::updateActiveLaneMask, ctx, lane, enabled != 0);
+	}
+
+	SpirvShader::DC::Group SpirvShader::DC::registers()
+	{ 
+		return Group(ctx, rr::Call(&Ctx::registers, ctx));
+	}
+
+	SpirvShader::DC::Group SpirvShader::DC::locals()
+	{ 
+		return Group(ctx, rr::Call(&Ctx::locals, ctx));
+	}
+	
+	SpirvShader::DC::Group SpirvShader::DC::hovers()
+	{ 
+		return Group(ctx, rr::Call(&Ctx::hovers, ctx));
+	}
+
+	SpirvShader::DC::Group SpirvShader::DC::registersLane(uint32_t lane)
+	{ 
+		return Group(ctx, rr::Call(&Ctx::registersLane, ctx, lane));
+	}
+
+	SpirvShader::DC::Group SpirvShader::DC::localsLane(uint32_t lane)
+	{ 
+		return Group(ctx, rr::Call(&Ctx::localsLane, ctx, lane));
+	}
+
+	SpirvShader::DC::Ctx* SpirvShader::DC::Ctx::create(const sw::SpirvShader* shader, const char* stackBase) {
+		auto lock = shader->dbg.ctx->lock();
+		return new Ctx(shader, stackBase, lock);
+	}
+
+	void SpirvShader::DC::Ctx::destroy(Ctx* context) {
+		delete context;
+	}
+
+	void SpirvShader::DC::Ctx::enter(vk::dbg::Context::Lock& lock, const char* name) {
+		thread->enter(lock, shader->dbg.spirvFile, name);
+	}
+
+	void SpirvShader::DC::Ctx::exit() {
+		thread->exit();
+	}
+
+	void SpirvShader::DC::Ctx::updateActiveLaneMask(int lane, bool enabled) {
+		registersByLane[lane]->put("enabled", vk::dbg::make_constant(enabled));
+	}
+
+	void SpirvShader::DC::Ctx::update(int line, vk::dbg::File::ID fileID) {
+		auto file = ctx->lock().get(fileID);
+		thread->update({line, file});
+	}
+
+	vk::dbg::VariableContainer* SpirvShader::DC::Ctx::registers() { return thread->registers().get(); }
+	vk::dbg::VariableContainer* SpirvShader::DC::Ctx::locals() { return thread->locals().get(); }
+	vk::dbg::VariableContainer* SpirvShader::DC::Ctx::hovers() { return thread->hovers().get(); }
+
+	vk::dbg::VariableContainer* SpirvShader::DC::Ctx::registersLane(int i) { return registersByLane[i].get(); }
+	vk::dbg::VariableContainer* SpirvShader::DC::Ctx::localsLane(int i) { return localsByLane[i].get(); }
+
+	template<typename K>
+	vk::dbg::VariableContainer* SpirvShader::DC::Ctx::group(vk::dbg::VariableContainer* vc, K key) {
+		auto out = ctx->lock().createVariableContainer();
+		vc->put(tostring(key), out);
+		return out.get();
+	}
+
+	template<typename K, typename V>
+	void SpirvShader::DC::Ctx::put(vk::dbg::VariableContainer* vc, K key, V value) {
+		vc->put(tostring(key), vk::dbg::make_constant(value));
+	}
+
+	std::string SpirvShader::DC::Ctx::regname(int reg) { return "%" + std::to_string(reg); }
+
+	template<typename T>
+	std::string SpirvShader::DC::Ctx::tostring(const T& s) { return std::to_string(s); }
+	std::string SpirvShader::DC::Ctx::tostring(const char* s) { return s; }
+	std::string SpirvShader::DC::Ctx::tostring(SpirvShader::Object::ID id) { return "%" + std::to_string(id.value()); }
+
+	SpirvShader::DC::Ctx::Ctx(const SpirvShader* shader, const char* stackBase, vk::dbg::Context::Lock& lock)
+		: shader(shader)
+		, ctx(shader->dbg.ctx)
+		, thread(lock.currentThread()) {
+
+		enter(lock, stackBase);
+		for (int i = 0; i < sw::SIMD::Width; i++) {
+			registersByLane[i] = lock.createVariableContainer();
+			localsByLane[i] = lock.createVariableContainer();
+			thread->registers()->put(laneNames[i], registersByLane[i]);
+			thread->locals()->put(laneNames[i], localsByLane[i]);
+		}
+	}
+
+	SpirvShader::DC::Ctx::~Ctx() {
+		exit();
+	}
+	// << DEBUGSERVER
 }
