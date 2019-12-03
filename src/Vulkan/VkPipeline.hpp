@@ -30,6 +30,11 @@ namespace sw
 namespace vk
 {
 
+namespace dbg
+{
+class Context;
+} // namespace dbg
+
 class PipelineCache;
 class PipelineLayout;
 class ShaderModule;
@@ -38,7 +43,9 @@ class Device;
 class Pipeline
 {
 public:
-	Pipeline(PipelineLayout const *layout, const Device *device);
+	Pipeline(PipelineLayout const *layout,
+	         const Device *device,
+	         const std::shared_ptr<vk::dbg::Context>& dbgctx);
 	virtual ~Pipeline() = default;
 
 	operator VkPipeline()
@@ -67,12 +74,16 @@ protected:
 	PipelineLayout const *layout = nullptr;
 
 	const bool robustBufferAccess = true;
+	const std::shared_ptr<vk::dbg::Context> dbgctx;
 };
 
 class GraphicsPipeline : public Pipeline, public ObjectBase<GraphicsPipeline, VkPipeline>
 {
 public:
-	GraphicsPipeline(const VkGraphicsPipelineCreateInfo* pCreateInfo, void* mem, const Device *device);
+	GraphicsPipeline(const VkGraphicsPipelineCreateInfo* pCreateInfo,
+	                 void* mem,
+	                 const Device *device,
+	                 const std::shared_ptr<vk::dbg::Context>& dbgctx);
 	virtual ~GraphicsPipeline() = default;
 
 	void destroyPipeline(const VkAllocationCallbacks* pAllocator) override;
@@ -113,7 +124,10 @@ private:
 class ComputePipeline : public Pipeline, public ObjectBase<ComputePipeline, VkPipeline>
 {
 public:
-	ComputePipeline(const VkComputePipelineCreateInfo* pCreateInfo, void* mem, const Device *device);
+	ComputePipeline(const VkComputePipelineCreateInfo* pCreateInfo,
+	                void* mem,
+	                const Device *device,
+	                const std::shared_ptr<vk::dbg::Context>& dbgctx);
 	virtual ~ComputePipeline() = default;
 
 	void destroyPipeline(const VkAllocationCallbacks* pAllocator) override;

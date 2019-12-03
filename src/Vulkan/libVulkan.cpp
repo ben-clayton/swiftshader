@@ -1575,7 +1575,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(VkDevice device, VkPipe
 	VkResult errorResult = VK_SUCCESS;
 	for(uint32_t i = 0; i < createInfoCount; i++)
 	{
-		VkResult result = vk::GraphicsPipeline::Create(pAllocator, &pCreateInfos[i], &pPipelines[i], vk::Cast(device));
+		VkResult result = vk::GraphicsPipeline::Create(pAllocator, &pCreateInfos[i], &pPipelines[i], vk::Cast(device), getDebugContext());
 
 		if(result == VK_SUCCESS)
 		{
@@ -1607,7 +1607,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipel
 	VkResult errorResult = VK_SUCCESS;
 	for(uint32_t i = 0; i < createInfoCount; i++)
 	{
-		VkResult result = vk::ComputePipeline::Create(pAllocator, &pCreateInfos[i], &pPipelines[i], vk::Cast(device));
+		VkResult result = vk::ComputePipeline::Create(pAllocator, &pCreateInfos[i], &pPipelines[i], vk::Cast(device), getDebugContext());
 
 		if(result == VK_SUCCESS)
 		{

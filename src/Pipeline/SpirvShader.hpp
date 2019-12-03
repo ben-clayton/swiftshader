@@ -50,6 +50,11 @@ namespace vk
 	class Sampler;
 	class RenderPass;
 	struct SampledImageDescriptor;
+
+	namespace dbg {
+		class Context;
+	} // namespace vk::dbg
+
 } // namespace vk
 
 namespace sw
@@ -459,7 +464,8 @@ namespace sw
 		            InsnStore const &insns,
 		            const vk::RenderPass *renderPass,
 		            uint32_t subpassIndex,
-		            bool robustBufferAccess);
+		            bool robustBufferAccess,
+		            const std::shared_ptr<vk::dbg::Context>& dbgctx);
 
 		struct Modes
 		{

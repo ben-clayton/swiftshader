@@ -30,7 +30,8 @@ namespace sw
 			InsnStore const &insns,
 			const vk::RenderPass *renderPass,
 			uint32_t subpassIndex,
-			bool robustBufferAccess)
+			bool robustBufferAccess,
+			const std::shared_ptr<vk::dbg::Context>& dbgctx)
 				: insns{insns}, inputs{MAX_INTERFACE_COMPONENTS},
 				  outputs{MAX_INTERFACE_COMPONENTS},
 				  codeSerialID(codeSerialID),
