@@ -53,6 +53,7 @@ namespace vk
 
 	namespace dbg {
 		class Context;
+		class File;
 	} // namespace vk::dbg
 
 } // namespace vk
@@ -661,6 +662,18 @@ namespace sw
 		std::unordered_map<spv::BuiltIn, BuiltinMapping, BuiltInHash> outputBuiltins;
 		WorkgroupMemory workgroupMemory;
 
+		struct Debug {
+			class Context;
+			class Group;
+
+			std::shared_ptr<vk::dbg::Context> ctx;
+			std::shared_ptr<vk::dbg::File> spirvFile;
+			std::unordered_map<const void*, int> spirvLineMappings;  // instruction pointer to line
+			std::unordered_map<const void*, Object::ID> results; // instruction pointer to result ID
+		};
+
+		Debug dbg;
+
 	private:
 		const uint32_t codeSerialID;
 		Modes modes = {};
@@ -801,10 +814,7 @@ namespace sw
 				return RValue<SIMD::Int>(storesAndAtomicsMaskValue);
 			}
 
-			void setActiveLaneMask(RValue<SIMD::Int> mask)
-			{
-				activeLaneMaskValue = mask.value;
-			}
+			void setActiveLaneMask(RValue<SIMD::Int> mask, const std::shared_ptr<vk::dbg::Context>& dbgctx);
 
 			// Add a new active lane mask edge from the current block to out.
 			// The edge mask value will be (mask AND activeLaneMaskValue).
@@ -816,6 +826,8 @@ namespace sw
 			// If multiple active lane masks are added for the same edge, then
 			// they will be ORed together.
 			void addActiveLaneMaskEdge(Block::ID from, Block::ID to, RValue<SIMD::Int> mask);
+
+			void dbgUpdateActiveLaneMask(RValue<SIMD::Int> mask, const std::shared_ptr<vk::dbg::Context>& dbgctx);
 
 			SpirvRoutine *routine = nullptr; // The current routine being built.
 			Function::ID function; // The current function being built.
@@ -1077,6 +1089,42 @@ namespace sw
 
 		// Returns 0 when invalid.
 		static VkShaderStageFlagBits executionModelToStage(spv::ExecutionModel model);
+
+		// Debugger API functions. When ENABLE_VK_DBG is not defined, these are
+		// all no-ops.
+
+		// dbgCreateFile() generates a synthetic file containing the disassembly
+		// of the SPIR-V shader. This is the file displayed in the debug
+		// session.
+		void dbgCreateFile();
+
+		// dbgBeginEmit() sets up the debugging state for the shader.
+		void dbgBeginEmit(EmitState *state) const;
+
+		// dbgEndEmit() tears down the debugging state for the shader.
+		void dbgEndEmit(EmitState *state) const;
+
+		// dbgBeginEmitInstruction() updates the current debugger location for
+		// the given instruction.
+		void dbgBeginEmitInstruction(InsnIterator insn, EmitState *state) const;
+
+		// dbgEndEmitInstruction() creates any new debugger variables for the
+		// instruction that just completed.
+		void dbgEndEmitInstruction(InsnIterator insn, EmitState *state) const;
+
+		// dbgExposeIntermediate exposes the intermediate with the given ID to
+		// the debugger.
+		void dbgExposeIntermediate(Object::ID id, EmitState *state) const;
+
+		// dbgExposeVariable exposes the variable with the given ID to the
+		// debugger using the specified key.
+		template<typename Key>
+		void dbgExposeVariable(const Key& key, Object::ID id, EmitState *state) const;
+
+		// dbgExposeVariable exposes the variable with the given ID to the
+		// debugger under the specified group, for the specified SIMD lane.
+		template<typename Key>
+		void dbgExposeVariable(const Debug::Group& group, int lane, const Key& key, Object::ID id, EmitState *state) const;
 	};
 
 	class SpirvRoutine
@@ -1122,6 +1170,9 @@ namespace sw
 		SIMD::Int localInvocationIndex;
 		std::array<SIMD::Int, 3> localInvocationID;
 		std::array<SIMD::Int, 3> globalInvocationID;
+
+		// Pointer to a debug ctx structure.
+		Pointer<Byte> dbgctx;
 
 		void createVariable(SpirvShader::Object::ID id, uint32_t size)
 		{
