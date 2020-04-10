@@ -24,6 +24,7 @@ set(ROOT_PROJECT_LINK_LIBRARIES
 
 set(SYSTEM_UNIT_TESTS_SRC_FILES
     LRUCacheTests.cpp
+    SyncCacheTests.cpp
     main.cpp
     unittests.cpp
 )
@@ -49,6 +50,7 @@ target_link_options(system-unittests
 
 target_link_libraries(system-unittests
     PRIVATE
+        marl
         vk_system
         gtest
         gmock
