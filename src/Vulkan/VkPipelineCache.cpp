@@ -134,18 +134,8 @@ VkResult PipelineCache::merge(uint32_t srcCacheCount, const VkPipelineCache *pSr
 	for(uint32_t i = 0; i < srcCacheCount; i++)
 	{
 		PipelineCache *srcCache = Cast(pSrcCaches[i]);
-
-		{
-			marl::lock thisLock(spirvShadersMutex);
-			marl::lock srcLock(srcCache->spirvShadersMutex);
-			spirvShaders.insert(srcCache->spirvShaders.begin(), srcCache->spirvShaders.end());
-		}
-
-		{
-			marl::lock thisLock(computeProgramsMutex);
-			marl::lock srcLock(srcCache->computeProgramsMutex);
-			computePrograms.insert(srcCache->computePrograms.begin(), srcCache->computePrograms.end());
-		}
+		spirvShaders.addAll(srcCache->spirvShaders);
+		computePrograms.addAll(srcCache->computePrograms);
 	}
 
 	return VK_SUCCESS;

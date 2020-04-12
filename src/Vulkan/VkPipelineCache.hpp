@@ -18,12 +18,13 @@
 #include "VkObject.hpp"
 #include "VkSpecializationInfo.hpp"
 
+#include "System/SyncCache.hpp"
+
 #include "marl/mutex.h"
 #include "marl/tsa.h"
 
 #include <cstring>
 #include <functional>
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -82,10 +83,10 @@ public:
 	// getOrCreateShader() queries the cache for a shader with the given key.
 	// If one is found, it is returned, otherwise create() is called, the
 	// returned shader is added to the cache, and it is returned.
-	// Function must be a function of the signature:
+	// CREATE must be a function of the signature:
 	//     std::shared_ptr<sw::SpirvShader>()
-	template<typename Function>
-	inline std::shared_ptr<sw::SpirvShader> getOrCreateShader(const PipelineCache::SpirvShaderKey &key, Function &&create);
+	template<typename CREATE>
+	inline std::shared_ptr<sw::SpirvShader> getOrCreateShader(const PipelineCache::SpirvShaderKey &key, CREATE &&create);
 
 	struct ComputeProgramKey
 	{
@@ -111,10 +112,10 @@ public:
 	// the given key.
 	// If one is found, it is returned, otherwise create() is called, the
 	// returned program is added to the cache, and it is returned.
-	// Function must be a function of the signature:
+	// CREATE must be a function of the signature:
 	//     std::shared_ptr<sw::ComputeProgram>()
-	template<typename Function>
-	inline std::shared_ptr<sw::ComputeProgram> getOrCreateComputeProgram(const PipelineCache::ComputeProgramKey &key, Function &&create);
+	template<typename CREATE>
+	inline std::shared_ptr<sw::ComputeProgram> getOrCreateComputeProgram(const PipelineCache::ComputeProgramKey &key, CREATE &&create);
 
 private:
 	struct CacheHeader
@@ -129,11 +130,11 @@ private:
 	size_t dataSize = 0;
 	uint8_t *data = nullptr;
 
-	marl::mutex spirvShadersMutex;
-	std::map<SpirvShaderKey, std::shared_ptr<sw::SpirvShader>> spirvShaders GUARDED_BY(spirvShadersMutex);
-
-	marl::mutex computeProgramsMutex;
-	std::map<ComputeProgramKey, std::shared_ptr<sw::ComputeProgram>> computePrograms GUARDED_BY(computeProgramsMutex);
+	// TODO(bclayton): Replace use of std::map with std::unordered_map.
+	using SpirvShaderCache = std::map<SpirvShaderKey, std::shared_ptr<sw::SpirvShader>>;
+	using ComputeProgramCache = std::map<ComputeProgramKey, std::shared_ptr<sw::ComputeProgram>>;
+	sw::SyncCache<SpirvShaderCache> spirvShaders;
+	sw::SyncCache<ComputeProgramCache> computePrograms;
 };
 
 static inline PipelineCache *Cast(VkPipelineCache object)
@@ -141,30 +142,16 @@ static inline PipelineCache *Cast(VkPipelineCache object)
 	return PipelineCache::Cast(object);
 }
 
-template<typename Function>
-std::shared_ptr<sw::ComputeProgram> PipelineCache::getOrCreateComputeProgram(const PipelineCache::ComputeProgramKey &key, Function &&create)
+template<typename CREATE>
+std::shared_ptr<sw::SpirvShader> PipelineCache::getOrCreateShader(const PipelineCache::SpirvShaderKey &key, CREATE &&create)
 {
-	marl::lock lock(computeProgramsMutex);
-
-	auto it = computePrograms.find(key);
-	if(it != computePrograms.end()) { return it->second; }
-
-	auto created = create();
-	computePrograms.emplace(key, created);
-	return created;
+	return spirvShaders.getOrCreate(key, create);
 }
 
-template<typename Function>
-std::shared_ptr<sw::SpirvShader> PipelineCache::getOrCreateShader(const PipelineCache::SpirvShaderKey &key, Function &&create)
+template<typename CREATE>
+std::shared_ptr<sw::ComputeProgram> PipelineCache::getOrCreateComputeProgram(const PipelineCache::ComputeProgramKey &key, CREATE &&create)
 {
-	marl::lock lock(spirvShadersMutex);
-
-	auto it = spirvShaders.find(key);
-	if(it != spirvShaders.end()) { return it->second; }
-
-	auto created = create();
-	spirvShaders.emplace(key, created);
-	return created;
+	return computePrograms.getOrCreate(key, create);
 }
 
 }  // namespace vk
