@@ -37,9 +37,7 @@ rr::RValue<rr::Int> PackFields(rr::Int4 const &ints, const sw::int4 shifts)
 namespace sw {
 
 Blitter::Blitter()
-    : blitMutex()
-    , blitCache(1024)
-    , cornerUpdateMutex()
+    : blitCache(1024)
     , cornerUpdateCache(64)  // We only need one of these per format
 {
 }
@@ -1715,30 +1713,16 @@ Blitter::BlitRoutineType Blitter::generate(const State &state)
 
 Blitter::BlitRoutineType Blitter::getBlitRoutine(const State &state)
 {
-	marl::lock lock(blitMutex);
-	auto blitRoutine = blitCache.lookup(state);
-
-	if(!blitRoutine)
-	{
-		blitRoutine = generate(state);
-		blitCache.add(state, blitRoutine);
-	}
-
-	return blitRoutine;
+	return blitCache.getOrCreate(state, [&] {
+		return generate(state);
+	});
 }
 
 Blitter::CornerUpdateRoutineType Blitter::getCornerUpdateRoutine(const State &state)
 {
-	marl::lock lock(cornerUpdateMutex);
-	auto cornerUpdateRoutine = cornerUpdateCache.lookup(state);
-
-	if(!cornerUpdateRoutine)
-	{
-		cornerUpdateRoutine = generateCornerUpdate(state);
-		cornerUpdateCache.add(state, cornerUpdateRoutine);
-	}
-
-	return cornerUpdateRoutine;
+	return cornerUpdateCache.getOrCreate(state, [&] {
+		return generateCornerUpdate(state);
+	});
 }
 
 void Blitter::copy(const vk::Image *src, uint8_t *dst, unsigned int dstPitch)

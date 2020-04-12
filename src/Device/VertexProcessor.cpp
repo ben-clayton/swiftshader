@@ -92,19 +92,11 @@ VertexProcessor::RoutineType VertexProcessor::routine(const State &state,
                                                       SpirvShader const *vertexShader,
                                                       const vk::DescriptorSet::Bindings &descriptorSets)
 {
-	auto routine = routineCache->lookup(state);
-
-	if(!routine)  // Create one
-	{
-		VertexRoutine *generator = new VertexProgram(state, pipelineLayout, vertexShader, descriptorSets);
+	return routineCache->getOrCreate(state, [&] {
+		auto generator = std::make_unique<VertexProgram>(state, pipelineLayout, vertexShader, descriptorSets);
 		generator->generate();
-		routine = (*generator)("VertexRoutine_%0.8X", state.shaderID);
-		delete generator;
-
-		routineCache->add(state, routine);
-	}
-
-	return routine;
+		return (*generator)("VertexRoutine_%0.8X", state.shaderID);
+	});
 }
 
 }  // namespace sw

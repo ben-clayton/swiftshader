@@ -93,19 +93,11 @@ SetupProcessor::State SetupProcessor::update(const sw::Context *context) const
 
 SetupProcessor::RoutineType SetupProcessor::routine(const State &state)
 {
-	auto routine = routineCache->lookup(state);
-
-	if(!routine)
-	{
-		SetupRoutine *generator = new SetupRoutine(state);
+	return routineCache->getOrCreate(state, [&] {
+		auto generator = std::make_unique<SetupRoutine>(state);
 		generator->generate();
-		routine = generator->getRoutine();
-		delete generator;
-
-		routineCache->add(state, routine);
-	}
-
-	return routine;
+		return generator->getRoutine();
+	});
 }
 
 void SetupProcessor::setRoutineCacheSize(int cacheSize)

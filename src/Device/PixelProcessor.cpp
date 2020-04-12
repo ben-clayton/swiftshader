@@ -148,19 +148,11 @@ PixelProcessor::RoutineType PixelProcessor::routine(const State &state,
                                                     SpirvShader const *pixelShader,
                                                     const vk::DescriptorSet::Bindings &descriptorSets)
 {
-	auto routine = routineCache->lookup(state);
-
-	if(!routine)
-	{
-		QuadRasterizer *generator = new PixelProgram(state, pipelineLayout, pixelShader, descriptorSets);
+	return routineCache->getOrCreate(state, [&] {
+		auto generator = std::make_unique<PixelProgram>(state, pipelineLayout, pixelShader, descriptorSets);
 		generator->generate();
-		routine = (*generator)("PixelRoutine_%0.8X", state.shaderID);
-		delete generator;
-
-		routineCache->add(state, routine);
-	}
-
-	return routine;
+		return (*generator)("PixelRoutine_%0.8X", state.shaderID);
+	});
 }
 
 }  // namespace sw
