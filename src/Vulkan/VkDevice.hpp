@@ -19,10 +19,12 @@
 #include "VkSampler.hpp"
 #include "Reactor/Routine.hpp"
 #include "System/LRUCache.hpp"
+#include "System/SyncCache.hpp"
 
 #include "marl/mutex.h"
 #include "marl/tsa.h"
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <unordered_map>
@@ -93,35 +95,26 @@ public:
 		// If one is found, it is returned, otherwise createRoutine(key) is
 		// called, the returned Routine is added to the cache, and it is
 		// returned.
-		// Function must be a function of the signature:
+		// CREATE must be a function of the signature:
 		//     std::shared_ptr<rr::Routine>(const Key &)
-		template<typename Function>
-		std::shared_ptr<rr::Routine> getOrCreate(const Key &key, Function &&createRoutine)
+		template<typename CREATE>
+		std::shared_ptr<rr::Routine> getOrCreate(const Key &key, CREATE &&create)
 		{
 			auto it = snapshot.find(key);
 			if(it != snapshot.end()) { return it->second; }
 
-			marl::lock lock(mutex);
-			if(auto existingRoutine = cache.lookup(key))
-			{
-				return existingRoutine;
-			}
-
-			std::shared_ptr<rr::Routine> newRoutine = createRoutine(key);
-			cache.add(key, newRoutine);
-			snapshotNeedsUpdate = true;
-
-			return newRoutine;
+			return cache.getOrCreate(key, [&] {
+				snapshotNeedsUpdate = true;
+				return create(key);
+			});
 		}
 
 		void updateSnapshot();
 
 	private:
-		bool snapshotNeedsUpdate = false;
+		std::atomic<bool> snapshotNeedsUpdate = { false };
 		std::unordered_map<Key, std::shared_ptr<rr::Routine>, Key::Hash> snapshot;
-
-		marl::mutex mutex;
-		sw::LRUCache<Key, std::shared_ptr<rr::Routine>, Key::Hash> cache GUARDED_BY(mutex);
+		sw::SyncCache<sw::LRUCache<Key, std::shared_ptr<rr::Routine>, Key::Hash>> cache;
 	};
 
 	SamplingRoutineCache *getSamplingRoutineCache() const;

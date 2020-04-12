@@ -40,18 +40,13 @@ namespace vk {
 
 void Device::SamplingRoutineCache::updateSnapshot()
 {
-	marl::lock lock(mutex);
-
-	if(snapshotNeedsUpdate)
+	if(snapshotNeedsUpdate.exchange(false))
 	{
 		snapshot.clear();
 
-		for(auto it : cache)
-		{
-			snapshot[it.key()] = it.data();
-		}
-
-		snapshotNeedsUpdate = false;
+		cache.foreach([&](const Key &key, const std::shared_ptr<rr::Routine> &routine) {
+			snapshot[key] = routine;
+		});
 	}
 }
 
