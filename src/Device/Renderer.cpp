@@ -36,6 +36,7 @@
 
 #include "marl/containers.h"
 #include "marl/defer.h"
+#include "marl/parallelize.h"
 #include "marl/trace.h"
 
 #undef max
@@ -199,13 +200,19 @@ void Renderer::draw(const sw::Context *context, VkIndexType indexType, unsigned 
 	if(update)
 	{
 		MARL_SCOPED_EVENT("update");
-		vertexState = vertexProcessor.update(context);
-		setupState = setupProcessor.update(context);
-		pixelState = pixelProcessor.update(context);
-
-		vertexRoutine = vertexProcessor.routine(vertexState, context->pipelineLayout, context->vertexShader, context->descriptorSets);
-		setupRoutine = setupProcessor.routine(setupState);
-		pixelRoutine = pixelProcessor.routine(pixelState, context->pipelineLayout, context->pixelShader, context->descriptorSets);
+		marl::parallelize(
+		    [&] {
+			    vertexState = vertexProcessor.update(context);
+			    vertexRoutine = vertexProcessor.routine(vertexState, context->pipelineLayout, context->vertexShader, context->descriptorSets);
+		    },
+		    [&] {
+			    setupState = setupProcessor.update(context);
+			    setupRoutine = setupProcessor.routine(setupState);
+		    },
+		    [&] {
+			    pixelState = pixelProcessor.update(context);
+			    pixelRoutine = pixelProcessor.routine(pixelState, context->pipelineLayout, context->pixelShader, context->descriptorSets);
+		    });
 	}
 
 	draw->containsImageWrite = (context->vertexShader && context->vertexShader->containsImageWrite()) ||
