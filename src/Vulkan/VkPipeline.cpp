@@ -24,7 +24,9 @@
 #include "Pipeline/ComputeProgram.hpp"
 #include "Pipeline/SpirvShader.hpp"
 
+#include "marl/defer.h"
 #include "marl/trace.h"
+#include "marl/waitgroup.h"
 
 #include "spirv-tools/optimizer.hpp"
 
@@ -93,7 +95,7 @@ std::vector<uint32_t> preprocessSpirv(
 
 std::shared_ptr<sw::SpirvShader> createShader(
     const vk::PipelineCache::SpirvShaderKey &key,
-    const vk::ShaderModule *module,
+    uint32_t moduleSerialID,
     bool robustBufferAccess,
     const std::shared_ptr<vk::dbg::Context> &dbgctx)
 {
@@ -115,20 +117,20 @@ std::shared_ptr<sw::SpirvShader> createShader(
 
 	// If the pipeline has specialization constants, assume they're unique and
 	// use a new serial ID so the shader gets recompiled.
-	uint32_t codeSerialID = (key.getSpecializationInfo() ? vk::ShaderModule::nextSerialID() : module->getSerialID());
+	uint32_t codeSerialID = (key.getSpecializationInfo() ? vk::ShaderModule::nextSerialID() : moduleSerialID);
 
 	// TODO(b/119409619): use allocator.
 	return std::make_shared<sw::SpirvShader>(codeSerialID, key.getPipelineStage(), key.getEntryPointName().c_str(),
 	                                         code, key.getRenderPass(), key.getSubpassIndex(), robustBufferAccess, dbgctx);
 }
 
-std::shared_ptr<sw::ComputeProgram> createProgram(const vk::PipelineCache::ComputeProgramKey &key)
+std::shared_ptr<sw::ComputeProgram> createProgram(std::shared_ptr<sw::SpirvShader> shader, vk::PipelineLayout const *layout)
 {
 	MARL_SCOPED_EVENT("createProgram");
 
-	vk::DescriptorSet::Bindings descriptorSets;  // FIXME(b/129523279): Delay code generation until invoke time.
+	vk::DescriptorSet::Bindings descriptorSets;
 	// TODO(b/119409619): use allocator.
-	auto program = std::make_shared<sw::ComputeProgram>(key.getShader(), key.getLayout(), descriptorSets);
+	auto program = std::make_shared<sw::ComputeProgram>(std::move(shader), layout, descriptorSets);
 	program->generate();
 	program->finalize();
 	return program;
@@ -442,8 +444,7 @@ GraphicsPipeline::GraphicsPipeline(const VkGraphicsPipelineCreateInfo *pCreateIn
 
 void GraphicsPipeline::destroyPipeline(const VkAllocationCallbacks *pAllocator)
 {
-	vertexShader.reset();
-	fragmentShader.reset();
+	acquirable.destroy();
 }
 
 size_t GraphicsPipeline::ComputeRequiredAllocationSize(const VkGraphicsPipelineCreateInfo *pCreateInfo)
@@ -451,44 +452,10 @@ size_t GraphicsPipeline::ComputeRequiredAllocationSize(const VkGraphicsPipelineC
 	return 0;
 }
 
-void GraphicsPipeline::setShader(const VkShaderStageFlagBits &stage, const std::shared_ptr<sw::SpirvShader> spirvShader)
-{
-	switch(stage)
-	{
-		case VK_SHADER_STAGE_VERTEX_BIT:
-			ASSERT(vertexShader.get() == nullptr);
-			vertexShader = spirvShader;
-			context.vertexShader = vertexShader.get();
-			break;
-
-		case VK_SHADER_STAGE_FRAGMENT_BIT:
-			ASSERT(fragmentShader.get() == nullptr);
-			fragmentShader = spirvShader;
-			context.pixelShader = fragmentShader.get();
-			break;
-
-		default:
-			UNSUPPORTED("Unsupported stage");
-			break;
-	}
-}
-
-const std::shared_ptr<sw::SpirvShader> GraphicsPipeline::getShader(const VkShaderStageFlagBits &stage) const
-{
-	switch(stage)
-	{
-		case VK_SHADER_STAGE_VERTEX_BIT:
-			return vertexShader;
-		case VK_SHADER_STAGE_FRAGMENT_BIT:
-			return fragmentShader;
-		default:
-			UNSUPPORTED("Unsupported stage");
-			return fragmentShader;
-	}
-}
-
 void GraphicsPipeline::compileShaders(const VkAllocationCallbacks *pAllocator, const VkGraphicsPipelineCreateInfo *pCreateInfo, PipelineCache *pPipelineCache)
 {
+	std::vector<Environment::Stage> stages;
+
 	for(auto pStage = pCreateInfo->pStages; pStage != pCreateInfo->pStages + pCreateInfo->stageCount; pStage++)
 	{
 		if(pStage->flags != 0)
@@ -497,25 +464,88 @@ void GraphicsPipeline::compileShaders(const VkAllocationCallbacks *pAllocator, c
 			UNSUPPORTED("pStage->flags %d", int(pStage->flags));
 		}
 
-		const ShaderModule *module = vk::Cast(pStage->module);
-		const PipelineCache::SpirvShaderKey key(pStage->stage, pStage->pName, module->getCode(),
-		                                        vk::Cast(pCreateInfo->renderPass), pCreateInfo->subpass,
-		                                        pStage->pSpecializationInfo);
-		auto pipelineStage = key.getPipelineStage();
+		auto module = vk::Cast(pStage->module);
 
-		if(pPipelineCache)
-		{
-			auto shader = pPipelineCache->getOrCreateShader(key, [&] {
-				return createShader(key, module, robustBufferAccess, device->getDebuggerContext());
-			});
-			setShader(pipelineStage, shader);
-		}
-		else
-		{
-			auto shader = createShader(key, module, robustBufferAccess, device->getDebuggerContext());
-			setShader(pipelineStage, shader);
-		}
+		stages.emplace_back(Environment::Stage{
+		    /* stage */ pStage->stage,
+		    /* name */ pStage->pName,
+		    /* code */ module->getCode(),
+		    /* moduleSerialID */ module->getSerialID(),
+		    /* specializationInfo */ pStage->pSpecializationInfo,
+		});
 	}
+
+	ASSERT(!env);
+	env = std::make_unique<Environment>(Environment{
+	    /* stages */ std::move(stages),
+	    /* pipelineCache */ pPipelineCache,
+	    /* renderPass */ vk::Cast(pCreateInfo->renderPass),
+	    /* subpassIndex */ pCreateInfo->subpass,
+	});
+
+	// Start building the shaders now.
+	acquirable.acquire();
+	layout->incRefCount();
+	if(env->pipelineCache) { env->pipelineCache->acquire(); }
+
+	marl::schedule([=] {
+		defer(acquirable.release());
+		defer(layout->decRefCount());
+		defer(if(env->pipelineCache) { env->pipelineCache->release(); });
+		getOrBuild(CompileOptions{});
+	});
+}
+
+GraphicsPipeline::Shaders GraphicsPipeline::getOrBuild(const CompileOptions &options)
+{
+	return shaders.getOrCreate(options, [&] {
+		auto dbgCtx = device->getDebuggerContext();
+
+		Shaders shaders;
+		marl::WaitGroup wg(static_cast<int>(env->stages.size()));
+		for(auto &stage : env->stages)
+		{
+			marl::schedule([=, &shaders] {
+				defer(wg.done());
+
+				auto const key = PipelineCache::SpirvShaderKey{
+					/* pipelineStage */ stage.stage,
+					/* entryPointName */ stage.name,
+					/* insns */ stage.code,
+					/* renderPass */ env->renderPass,
+					/* subpassIndex */ env->subpassIndex,
+					/* specializationInfo */ stage.specializationInfo,
+				};
+
+				std::shared_ptr<sw::SpirvShader> shader;
+				if(env->pipelineCache)
+				{
+					shader = env->pipelineCache->getOrCreateShader(key, [&] {
+						return createShader(key, stage.moduleSerialID, robustBufferAccess, dbgCtx);
+					});
+				}
+				else
+				{
+					shader = createShader(key, stage.moduleSerialID, robustBufferAccess, dbgCtx);
+				}
+
+				switch(stage.stage)
+				{
+					case VK_SHADER_STAGE_VERTEX_BIT:
+						shaders.vertex = shader;
+						break;
+					case VK_SHADER_STAGE_FRAGMENT_BIT:
+						shaders.fragment = shader;
+						break;
+					default:
+						UNSUPPORTED("Unsupported stage");
+						break;
+				}
+			});
+		}
+		wg.wait();
+		return shaders;
+	});
 }
 
 uint32_t GraphicsPipeline::computePrimitiveCount(uint32_t vertexCount) const
@@ -541,9 +571,14 @@ uint32_t GraphicsPipeline::computePrimitiveCount(uint32_t vertexCount) const
 	return 0;
 }
 
-const sw::Context &GraphicsPipeline::getContext() const
+sw::Context GraphicsPipeline::getContext()
 {
-	return context;
+	auto shaders = getOrBuild(CompileOptions{});
+
+	auto out = context;
+	out.vertexShader = shaders.vertex.get();
+	out.pixelShader = shaders.fragment.get();
+	return out;
 }
 
 const VkRect2D &GraphicsPipeline::getScissor() const
@@ -573,8 +608,7 @@ ComputePipeline::ComputePipeline(const VkComputePipelineCreateInfo *pCreateInfo,
 
 void ComputePipeline::destroyPipeline(const VkAllocationCallbacks *pAllocator)
 {
-	shader.reset();
-	program.reset();
+	acquirable.destroy();
 }
 
 size_t ComputePipeline::ComputeRequiredAllocationSize(const VkComputePipelineCreateInfo *pCreateInfo)
@@ -585,30 +619,72 @@ size_t ComputePipeline::ComputeRequiredAllocationSize(const VkComputePipelineCre
 void ComputePipeline::compileShaders(const VkAllocationCallbacks *pAllocator, const VkComputePipelineCreateInfo *pCreateInfo, PipelineCache *pPipelineCache)
 {
 	auto &stage = pCreateInfo->stage;
-	const ShaderModule *module = vk::Cast(stage.module);
 
-	ASSERT(shader.get() == nullptr);
-	ASSERT(program.get() == nullptr);
+	auto module = vk::Cast(pCreateInfo->stage.module);
 
-	const PipelineCache::SpirvShaderKey shaderKey(
-	    stage.stage, stage.pName, module->getCode(), nullptr, 0, stage.pSpecializationInfo);
-	if(pPipelineCache)
-	{
-		shader = pPipelineCache->getOrCreateShader(shaderKey, [&] {
-			return createShader(shaderKey, module, robustBufferAccess, device->getDebuggerContext());
-		});
+	ASSERT(!env);
+	env = std::make_unique<Environment>(Environment{
+	    /* stage */ stage.stage,
+	    /* name */ stage.pName,
+	    /* code */ module->getCode(),
+	    /* moduleSerialID */ module->getSerialID(),
+	    /* specializationInfo */ stage.pSpecializationInfo,
+	    /* pipelineCache */ pPipelineCache,
+	});
+
+	// Start building the program now.
+	acquirable.acquire();
+	layout->incRefCount();
+	if(env->pipelineCache) { env->pipelineCache->acquire(); }
+
+	marl::schedule([=] {
+		defer(acquirable.release());
+		defer(layout->decRefCount());
+		defer(if(env->pipelineCache) { env->pipelineCache->release(); });
+		getOrBuild(CompileOptions{});
+	});
+}
+
+std::shared_ptr<sw::ComputeProgram> ComputePipeline::getOrBuild(const CompileOptions &options)
+{
+	return programs.getOrCreate(options, [&] {
+		auto dbgCtx = device->getDebuggerContext();
+
+		auto const key = PipelineCache::SpirvShaderKey{
+			/* pipelineStage */ env->stage,
+			/* entryPointName */ env->name,
+			/* insns */ env->code,
+			/* renderPass */ nullptr,
+			/* subpassIndex */ 0,
+			/* specializationInfo */ env->specializationInfo,
+		};
+
+		auto const moduleSerialID = env->moduleSerialID;
+
+		std::shared_ptr<sw::SpirvShader> shader;
+		if(env->pipelineCache)
+		{
+			shader = env->pipelineCache->getOrCreateShader(key, [&] {
+				return createShader(key, moduleSerialID, robustBufferAccess, dbgCtx);
+			});
+		}
+		else
+		{
+			shader = createShader(key, moduleSerialID, robustBufferAccess, dbgCtx);
+		}
 
 		const PipelineCache::ComputeProgramKey programKey(shader.get(), layout);
-		program = pPipelineCache->getOrCreateComputeProgram(programKey, [&] {
-			return createProgram(programKey);
-		});
-	}
-	else
-	{
-		shader = createShader(shaderKey, module, robustBufferAccess, device->getDebuggerContext());
-		const PipelineCache::ComputeProgramKey programKey(shader.get(), layout);
-		program = createProgram(programKey);
-	}
+		if(env->pipelineCache)
+		{
+			return env->pipelineCache->getOrCreateComputeProgram(programKey, [&] {
+				return createProgram(std::move(shader), layout);
+			});
+		}
+		else
+		{
+			return createProgram(std::move(shader), layout);
+		}
+	});
 }
 
 void ComputePipeline::run(uint32_t baseGroupX, uint32_t baseGroupY, uint32_t baseGroupZ,
@@ -618,7 +694,11 @@ void ComputePipeline::run(uint32_t baseGroupX, uint32_t baseGroupY, uint32_t bas
                           vk::DescriptorSet::DynamicOffsets const &descriptorDynamicOffsets,
                           sw::PushConstantStorage const &pushConstants)
 {
+	ASSERT(env);
+
+	auto program = getOrBuild(CompileOptions{});
 	ASSERT_OR_RETURN(program != nullptr);
+
 	program->run(
 	    descriptorSetObjects, descriptorSets, descriptorDynamicOffsets, pushConstants,
 	    baseGroupX, baseGroupY, baseGroupZ,

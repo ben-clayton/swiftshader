@@ -15,6 +15,7 @@
 #ifndef VK_PIPELINE_CACHE_HPP_
 #define VK_PIPELINE_CACHE_HPP_
 
+#include "Acquirable.hpp"
 #include "VkObject.hpp"
 #include "VkSpecializationInfo.hpp"
 
@@ -117,6 +118,10 @@ public:
 	template<typename CREATE>
 	inline std::shared_ptr<sw::ComputeProgram> getOrCreateComputeProgram(const PipelineCache::ComputeProgramKey &key, CREATE &&create);
 
+	// Acquirable interface.
+	void acquire() { acquirable.acquire(); }
+	void release() { acquirable.release(); }
+
 private:
 	struct CacheHeader
 	{
@@ -135,6 +140,8 @@ private:
 	using ComputeProgramCache = std::map<ComputeProgramKey, std::shared_ptr<sw::ComputeProgram>>;
 	sw::SyncCache<SpirvShaderCache> spirvShaders;
 	sw::SyncCache<ComputeProgramCache> computePrograms;
+
+	Acquirable acquirable;
 };
 
 static inline PipelineCache *Cast(VkPipelineCache object)

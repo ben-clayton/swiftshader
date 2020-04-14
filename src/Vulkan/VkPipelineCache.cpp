@@ -99,6 +99,7 @@ PipelineCache::~PipelineCache()
 
 void PipelineCache::destroy(const VkAllocationCallbacks *pAllocator)
 {
+	acquirable.destroy();
 	vk::deallocate(data, pAllocator);
 }
 

@@ -16,9 +16,15 @@
 #define VK_PIPELINE_HPP_
 
 #include "VkObject.hpp"
+
+#include "VkDescriptorSet.hpp"
+#include "VkPipelineCache.hpp"
+#include "VkSpecializationInfo.hpp"
+
 #include "Device/Renderer.hpp"
-#include "Vulkan/VkDescriptorSet.hpp"
-#include "Vulkan/VkPipelineCache.hpp"
+
+#include "marl/waitgroup.h"
+
 #include <memory>
 
 namespace sw {
@@ -68,8 +74,25 @@ public:
 	}
 
 protected:
-	PipelineLayout *layout = nullptr;
+	struct CompileOptions
+	{
+		// TODO(bclayton): add compilation options here. Examples: optimization
+		// level, reactor backend, debugger features.
+
+		bool operator==(const CompileOptions &other) const { return true; }
+	};
+
+	struct CompileOptionsHash
+	{
+		uint64_t operator()(const CompileOptions &) const { return 0; }
+	};
+
+	template<typename T>
+	using CompileCache = sw::SyncCache<std::unordered_map<CompileOptions, T, CompileOptionsHash>>;
+
+	PipelineLayout *const layout;
 	Device const *const device;
+	Acquirable acquirable;
 
 	const bool robustBufferAccess = true;
 };
@@ -96,7 +119,7 @@ public:
 	void compileShaders(const VkAllocationCallbacks *pAllocator, const VkGraphicsPipelineCreateInfo *pCreateInfo, PipelineCache *pipelineCache);
 
 	uint32_t computePrimitiveCount(uint32_t vertexCount) const;
-	const sw::Context &getContext() const;
+	sw::Context getContext();
 	const VkRect2D &getScissor() const;
 	const VkViewport &getViewport() const;
 	const sw::float4 &getBlendConstants() const;
@@ -104,10 +127,32 @@ public:
 	bool hasPrimitiveRestartEnable() const { return primitiveRestartEnable; }
 
 private:
-	void setShader(const VkShaderStageFlagBits &stage, const std::shared_ptr<sw::SpirvShader> spirvShader);
-	const std::shared_ptr<sw::SpirvShader> getShader(const VkShaderStageFlagBits &stage) const;
-	std::shared_ptr<sw::SpirvShader> vertexShader;
-	std::shared_ptr<sw::SpirvShader> fragmentShader;
+	struct Environment
+	{
+		struct Stage
+		{
+			VkShaderStageFlagBits stage;
+			std::string name;
+			std::vector<uint32_t> code;
+			uint32_t moduleSerialID;
+			vk::SpecializationInfo specializationInfo;
+		};
+		std::vector<Stage> stages;
+		vk::PipelineCache *pipelineCache;
+		vk::RenderPass *renderPass;
+		uint32_t subpassIndex;
+	};
+
+	struct Shaders
+	{
+		std::shared_ptr<sw::SpirvShader> vertex;
+		std::shared_ptr<sw::SpirvShader> fragment;
+	};
+
+	Shaders getOrBuild(const CompileOptions &);
+
+	std::unique_ptr<const Environment> env;
+	CompileCache<Shaders> shaders;
 
 	uint32_t dynamicStateFlags = 0;
 	bool primitiveRestartEnable = false;
@@ -144,8 +189,20 @@ public:
 	         sw::PushConstantStorage const &pushConstants);
 
 protected:
-	std::shared_ptr<sw::SpirvShader> shader;
-	std::shared_ptr<sw::ComputeProgram> program;
+	struct Environment
+	{
+		VkShaderStageFlagBits stage;
+		std::string name;
+		std::vector<uint32_t> code;
+		uint32_t moduleSerialID;
+		vk::SpecializationInfo specializationInfo;
+		vk::PipelineCache *pipelineCache;
+	};
+	std::shared_ptr<sw::ComputeProgram> getOrBuild(const CompileOptions &);
+
+	std::unique_ptr<const Environment> env;
+	CompileCache<std::shared_ptr<sw::ComputeProgram>> programs;
+	marl::WaitGroup numPending;
 };
 
 static inline Pipeline *Cast(VkPipeline object)

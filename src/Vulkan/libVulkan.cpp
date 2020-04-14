@@ -72,6 +72,7 @@
 
 #include "Reactor/Nucleus.hpp"
 
+#include "marl/defer.h"
 #include "marl/mutex.h"
 #include "marl/scheduler.h"
 #include "marl/thread.h"
@@ -1817,6 +1818,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(VkDevice device, VkPipe
 	TRACE("(VkDevice device = %p, VkPipelineCache pipelineCache = %p, uint32_t createInfoCount = %d, const VkGraphicsPipelineCreateInfo* pCreateInfos = %p, const VkAllocationCallbacks* pAllocator = %p, VkPipeline* pPipelines = %p)",
 	      device, static_cast<void *>(pipelineCache), int(createInfoCount), pCreateInfos, pAllocator, pPipelines);
 
+	ASSERT_MSG(marl::Scheduler::get() == nullptr, "SwiftShader does not currently support external marl schedulers");
+	auto scheduler = getOrCreateScheduler();
+	scheduler->bind();
+	defer(scheduler->unbind());
+
 	VkResult errorResult = VK_SUCCESS;
 	for(uint32_t i = 0; i < createInfoCount; i++)
 	{
@@ -1848,6 +1854,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipel
 {
 	TRACE("(VkDevice device = %p, VkPipelineCache pipelineCache = %p, uint32_t createInfoCount = %d, const VkComputePipelineCreateInfo* pCreateInfos = %p, const VkAllocationCallbacks* pAllocator = %p, VkPipeline* pPipelines = %p)",
 	      device, static_cast<void *>(pipelineCache), int(createInfoCount), pCreateInfos, pAllocator, pPipelines);
+
+	ASSERT_MSG(marl::Scheduler::get() == nullptr, "SwiftShader does not currently support external marl schedulers");
+	auto scheduler = getOrCreateScheduler();
+	scheduler->bind();
+	defer(scheduler->unbind());
 
 	VkResult errorResult = VK_SUCCESS;
 	for(uint32_t i = 0; i < createInfoCount; i++)
