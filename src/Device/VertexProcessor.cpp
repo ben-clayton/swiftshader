@@ -73,6 +73,7 @@ const VertexProcessor::State VertexProcessor::update(const sw::Context *context)
 	state.pipelineLayoutIdentifier = context->pipelineLayout->identifier;
 	state.robustBufferAccess = context->robustBufferAccess;
 	state.isPoint = context->topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+	state.debuggerEnabled = context->vertexShader->hasDebuggerEnabled();
 
 	for(int i = 0; i < MAX_INTERFACE_COMPONENTS / 4; i++)
 	{

@@ -61,7 +61,8 @@ public:
 		               const std::vector<uint32_t> &insns,
 		               const vk::RenderPass *renderPass,
 		               const uint32_t subpassIndex,
-		               const vk::SpecializationInfo &specializationInfo);
+		               const vk::SpecializationInfo &specializationInfo,
+		               const bool debuggerEnabled);
 
 		bool operator<(const SpirvShaderKey &other) const;
 
@@ -79,6 +80,7 @@ public:
 		const vk::RenderPass *renderPass;
 		const uint32_t subpassIndex;
 		const vk::SpecializationInfo specializationInfo;
+		const bool debuggerEnabled;
 	};
 
 	// getOrCreateShader() queries the cache for a shader with the given key.

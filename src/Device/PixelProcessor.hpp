@@ -91,6 +91,7 @@ public:
 		bool enableMultiSampling;
 		bool alphaToCoverage;
 		bool centroid;
+		bool debuggerEnabled;
 		VkFrontFace frontFace;
 		VkFormat depthFormat;
 	};

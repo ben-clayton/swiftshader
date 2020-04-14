@@ -78,17 +78,23 @@ protected:
 	{
 		// TODO(bclayton): add compilation options here. Examples: optimization
 		// level, reactor backend, debugger features.
+		bool debuggerEnabled = false;
 
-		bool operator==(const CompileOptions &other) const { return true; }
+		bool operator==(const CompileOptions &other) const
+		{
+			return debuggerEnabled == other.debuggerEnabled;
+		}
 	};
 
 	struct CompileOptionsHash
 	{
-		uint64_t operator()(const CompileOptions &) const { return 0; }
+		uint64_t operator()(const CompileOptions &options) const { return options.debuggerEnabled ? 1 : 0; }
 	};
 
 	template<typename T>
 	using CompileCache = sw::SyncCache<std::unordered_map<CompileOptions, T, CompileOptionsHash>>;
+
+	CompileOptions getCompileOptions() const;
 
 	PipelineLayout *const layout;
 	Device const *const device;

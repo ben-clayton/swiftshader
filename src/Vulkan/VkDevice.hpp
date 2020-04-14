@@ -144,6 +144,7 @@ public:
 	uint32_t indexSampler(const SamplerState &samplerState);
 	void removeSampler(const SamplerState &samplerState);
 
+	bool hasDebuggerConnection() const;
 	std::shared_ptr<vk::dbg::Context> getDebuggerContext() const
 	{
 #ifdef ENABLE_VK_DEBUGGER

@@ -22,13 +22,15 @@ PipelineCache::SpirvShaderKey::SpirvShaderKey(const VkShaderStageFlagBits pipeli
                                               const std::vector<uint32_t> &insns,
                                               const vk::RenderPass *renderPass,
                                               const uint32_t subpassIndex,
-                                              const vk::SpecializationInfo &specializationInfo)
+                                              const vk::SpecializationInfo &specializationInfo,
+                                              const bool debuggerEnabled)
     : pipelineStage(pipelineStage)
     , entryPointName(entryPointName)
     , insns(insns)
     , renderPass(renderPass)
     , subpassIndex(subpassIndex)
     , specializationInfo(specializationInfo)
+    , debuggerEnabled(debuggerEnabled)
 {
 }
 
@@ -49,29 +51,32 @@ bool PipelineCache::SpirvShaderKey::operator<(const SpirvShaderKey &other) const
 		return subpassIndex < other.subpassIndex;
 	}
 
+	if(int cmp = entryPointName.compare(other.entryPointName))
+	{
+		return cmp < 0;
+	}
+
 	if(insns.size() != other.insns.size())
 	{
 		return insns.size() < other.insns.size();
 	}
 
-	if(entryPointName.size() != other.entryPointName.size())
-	{
-		return entryPointName.size() < other.entryPointName.size();
-	}
-
-	int cmp = memcmp(entryPointName.c_str(), other.entryPointName.c_str(), entryPointName.size());
-	if(cmp != 0)
+	if(int cmp = memcmp(insns.data(), other.insns.data(), insns.size() * sizeof(uint32_t)))
 	{
 		return cmp < 0;
 	}
 
-	cmp = memcmp(insns.data(), other.insns.data(), insns.size() * sizeof(uint32_t));
-	if(cmp != 0)
+	if(specializationInfo < other.specializationInfo)
 	{
-		return cmp < 0;
+		return true;
 	}
 
-	return (specializationInfo < other.specializationInfo);
+	if(debuggerEnabled != other.debuggerEnabled)
+	{
+		return debuggerEnabled ? 1 : 0;
+	}
+
+	return false;
 }
 
 PipelineCache::PipelineCache(const VkPipelineCacheCreateInfo *pCreateInfo, void *mem)

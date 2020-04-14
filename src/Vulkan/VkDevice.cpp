@@ -308,4 +308,13 @@ void Device::removeSampler(const SamplerState &samplerState)
 	samplerIndexer->remove(samplerState);
 }
 
+bool Device::hasDebuggerConnection() const
+{
+#ifdef ENABLE_VK_DEBUGGER
+	return debugger.server ? debugger.server->hasConnection() : false;
+#else
+	return false;
+#endif  // ENABLE_VK_DEBUGGER
+}
+
 }  // namespace vk

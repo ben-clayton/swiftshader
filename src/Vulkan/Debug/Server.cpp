@@ -23,7 +23,8 @@
 #include "dap/network.h"
 #include "dap/protocol.h"
 #include "dap/session.h"
-#include "marl/waitgroup.h"
+
+#include "marl/event.h"
 
 #include <thread>
 #include <unordered_set>
@@ -49,7 +50,10 @@ public:
 	Impl(const std::shared_ptr<Context> &ctx, int port);
 	~Impl();
 
-	// EventListener
+	// Server compliance
+	bool hasConnection() const override;
+
+	// EventListener compliance
 	void onThreadStarted(ID<Thread>) override;
 	void onThreadStepped(ID<Thread>) override;
 	void onLineBreakpointHit(ID<Thread>) override;
@@ -63,6 +67,7 @@ public:
 	const std::unique_ptr<dap::net::Server> server;
 	const std::unique_ptr<dap::Session> session;
 	std::atomic<bool> clientIsVisualStudio = { false };
+	marl::Event connected = { marl::Event::Mode::Manual };
 };
 
 Server::Impl::Impl(const std::shared_ptr<Context> &context, int port)
@@ -179,6 +184,7 @@ Server::Impl::Impl(const std::shared_ptr<Context> &context, int port)
 			out.name = name;
 			response.threads.push_back(out);
 		};
+		DAP_LOG("done");
 		return response;
 	});
 
@@ -453,10 +459,9 @@ Server::Impl::Impl(const std::shared_ptr<Context> &context, int port)
 		return dap::LaunchResponse();
 	});
 
-	marl::WaitGroup configurationDone(1);
 	session->registerHandler([=](const dap::ConfigurationDoneRequest &req) {
 		DAP_LOG("ConfigurationDoneRequest receieved");
-		configurationDone.done();
+		connected.signal();
 		return dap::ConfigurationDoneResponse();
 	});
 
@@ -469,9 +474,14 @@ Server::Impl::Impl(const std::shared_ptr<Context> &context, int port)
 	if(waitForDebugger)
 	{
 		printf("Waiting for debugger connection...\n");
-		configurationDone.wait();
+		connected.wait();
 		printf("Debugger connection established\n");
 	}
+}
+
+bool Server::Impl::hasConnection() const
+{
+	return connected.isSignalled();
 }
 
 Server::Impl::~Impl()

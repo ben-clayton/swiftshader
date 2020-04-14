@@ -136,6 +136,8 @@ const PixelProcessor::State PixelProcessor::update(const Context *context) const
 		state.centroid = context->pixelShader->getModes().NeedsCentroid;
 	}
 
+	state.debuggerEnabled = context->pixelShader && context->pixelShader->hasDebuggerEnabled();
+
 	state.frontFace = context->frontFace;
 
 	state.hash = state.computeHash();

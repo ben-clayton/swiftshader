@@ -408,6 +408,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCre
 	{
 		if(!HasExtensionProperty(pCreateInfo->ppEnabledExtensionNames[i], instanceExtensionProperties, extensionPropertiesCount))
 		{
+			WARN("Missing extension '%s'", pCreateInfo->ppEnabledExtensionNames[i]);
 			return VK_ERROR_EXTENSION_NOT_PRESENT;
 		}
 	}

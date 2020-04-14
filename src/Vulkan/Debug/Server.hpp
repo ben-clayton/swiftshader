@@ -31,6 +31,9 @@ public:
 
 	virtual ~Server() = default;
 
+	// hasConnection returns true if there is a client connected to this server.
+	virtual bool hasConnection() const = 0;
+
 private:
 	class Impl;
 };
