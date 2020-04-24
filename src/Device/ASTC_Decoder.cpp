@@ -14,7 +14,9 @@
 
 #include "ASTC_Decoder.hpp"
 
+#include "System/LRUCache.hpp"
 #include "System/Math.hpp"
+#include "System/SyncCache.hpp"
 
 #ifdef SWIFTSHADER_ENABLE_ASTC
 #	include "astc_codec_internals.h"
@@ -96,7 +98,53 @@ void write_imageblock(unsigned char *img,
 		}
 	}
 }
-#endif
+
+using BlockSizeKey = uint32_t;
+
+class BlockData
+{
+public:
+	static BlockData *get()
+	{
+		static BlockData instance;
+		return &instance;
+	}
+
+	block_size_descriptor *getOrCreateBlockSizeDescriptor(int xBlockSize, int yBlockSize, int zBlockSize)
+	{
+		ASSERT_MSG(xBlockSize < 16, "xBlockSize: %d", xBlockSize);
+		ASSERT_MSG(yBlockSize < 16, "yBlockSize: %d", yBlockSize);
+		ASSERT_MSG(zBlockSize < 16, "zBlockSize: %d", zBlockSize);
+
+		auto key = (xBlockSize << 8) | (yBlockSize << 4) | zBlockSize;
+
+		return blockSizeDescriptors.getOrCreate(key, [&] {
+			auto out = new block_size_descriptor();
+			init_block_size_descriptor(xBlockSize, yBlockSize, zBlockSize, out);
+			return out;
+		});
+	}
+
+private:
+	BlockData()
+	    : blockSizeDescriptors(4)
+	{
+		build_quantization_mode_table();
+	}
+
+	~BlockData()
+	{
+		blockSizeDescriptors.foreach([](auto, auto bsd) {
+			term_block_size_descriptor(bsd);
+			delete bsd;
+		});
+	}
+
+	using LRUCache = sw::LRUCache<BlockSizeKey, block_size_descriptor *>;
+	sw::SyncCache<LRUCache> blockSizeDescriptors;
+};
+
+#endif  // SWIFTSHADER_ENABLE_ASTC
 
 }  // namespace
 
@@ -107,12 +155,9 @@ void ASTC_Decoder::Decode(const unsigned char *source, unsigned char *dest,
                           int xblocks, int yblocks, int zblocks, bool isUnsignedByte)
 {
 #ifdef SWIFTSHADER_ENABLE_ASTC
-	build_quantization_mode_table();
+	auto blockSizeDescriptor = BlockData::get()->getOrCreateBlockSizeDescriptor(xBlockSize, yBlockSize, zBlockSize);
 
 	astc_decode_mode decode_mode = isUnsignedByte ? DECODE_LDR : DECODE_HDR;
-
-	std::unique_ptr<block_size_descriptor> bsd(new block_size_descriptor);
-	init_block_size_descriptor(xBlockSize, yBlockSize, zBlockSize, bsd.get());
 
 	std::unique_ptr<imageblock> ib(new imageblock);
 	std::unique_ptr<symbolic_compressed_block> scb(new symbolic_compressed_block);
@@ -122,14 +167,13 @@ void ASTC_Decoder::Decode(const unsigned char *source, unsigned char *dest,
 		{
 			for(int x = 0; x < xblocks; x++, source += 16)
 			{
-				physical_to_symbolic(bsd.get(), *(physical_compressed_block *)source, scb.get());
-				decompress_symbolic_block(decode_mode, bsd.get(), x * xBlockSize, y * yBlockSize, z * zBlockSize, scb.get(), ib.get());
+				physical_to_symbolic(blockSizeDescriptor, *(physical_compressed_block *)source, scb.get());
+				decompress_symbolic_block(decode_mode, blockSizeDescriptor, x * xBlockSize, y * yBlockSize, z * zBlockSize, scb.get(), ib.get());
 				write_imageblock(dest, ib.get(), destWidth, destHeight, destDepth, bytes, destPitchB, destSliceB, isUnsignedByte,
 				                 xBlockSize, yBlockSize, zBlockSize, x * xBlockSize, y * yBlockSize, z * zBlockSize);
 			}
 		}
 	}
 
-	term_block_size_descriptor(bsd.get());
 #endif
 }
