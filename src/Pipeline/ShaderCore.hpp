@@ -565,12 +565,12 @@ struct PrintValue::Ty<sw::SIMD::Pointer>
 {
 	static std::string fmt(const sw::SIMD::Pointer &v)
 	{
-		return "{" + PrintValue::fmt(v.base) + " +" + PrintValue::fmt(v.offsets()) + "}";
+		return "{" + PrintValue::fmt(v.base) + PrintValue::fmt(v.limit()) + " +" + PrintValue::fmt(v.offsets()) + "}";
 	}
 
 	static std::vector<rr::Value *> val(const sw::SIMD::Pointer &v)
 	{
-		return PrintValue::vals(v.base, v.offsets());
+		return PrintValue::vals(v.base, v.limit(), v.offsets());
 	}
 };
 }  // namespace rr
