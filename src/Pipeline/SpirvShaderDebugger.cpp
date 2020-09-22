@@ -668,6 +668,158 @@ struct Operation : ObjectImpl<Operation, Object, Object::Kind::Operation>
 struct Expression : ObjectImpl<Expression, Object, Object::Kind::Expression>
 {
 	std::vector<Operation *> operations;
+
+	using Values = std::vector<rr::RValue<sw::SIMD::Int>>;
+
+	template<typename LOADER>
+	Values evaluate(const Values &in, LOADER &&loader) const
+	{
+		std::vector<Values> stack;
+		stack.emplace_back(in);
+
+		auto pop = [&] {
+			ASSERT_MSG(stack.size() > 0, "Attempting to pop empty stack for debug expression");
+			auto val = stack.back();
+			stack.pop_back();
+			return val;
+		};
+
+		auto transform = [](const Values &vals, auto &&op) {
+			Values result;
+			result.reserve(vals.size());
+			for(size_t i = 0; i < vals.size(); i++)
+			{
+				result.emplace_back(op(vals[i]));
+			}
+			return result;
+		};
+
+		auto binaryOp = [](const char *name, const Values &a, const Values &b, auto &&op) {
+			ASSERT_MSG(a.size() == b.size(),
+			           "Cannot %s values of size %d and %d",
+			           name, int(a.size()), int(b.size()));
+			Values result;
+			result.reserve(a.size());
+			for(size_t i = 0; i < a.size(); i++)
+			{
+				result.emplace_back(op(a[i], b[i]));
+			}
+			return result;
+		};
+
+		for(auto op : operations)
+		{
+			switch(op->opcode)
+			{
+				case OpenCLDebugInfo100Deref:
+				{
+					// Pops the top stack entry, treats it as an address, pushes
+					// the value retrieved from that address.
+					auto address = pop();
+					ASSERT_MSG(address.size() == 1, "OpenCLDebugInfo100Deref has %d values", int(address.size()));
+					Values dref = loader(address[0]);
+					stack.emplace_back(dref);
+					break;
+				}
+				case OpenCLDebugInfo100Plus:
+				{
+					// Pops the top two entries from the stack, adds them
+					// together and push the result.
+					auto a = pop();
+					auto b = pop();
+					stack.emplace_back(binaryOp("add", a, b, [](auto &a, auto &b) {
+						return a + b;
+					}));
+					break;
+				}
+				case OpenCLDebugInfo100Minus:
+				{
+					// Pops the top two entries from the stack, subtracts the
+					// former top entry from the former second to top entry and
+					// push the result.
+					auto a = pop();
+					auto b = pop();
+					stack.emplace_back(binaryOp("subtract", a, b, [](auto &valA, auto &valB) {
+						return valA + valB;
+					}));
+					break;
+				}
+				case OpenCLDebugInfo100PlusUconst:
+				{
+					// Pops the top stack entry, adds the addend operand to it,
+					// and pushes the result. The operand must be a single word
+					// integer literal.
+					ASSERT_MSG(op->operands.size() == 1,
+					           "Uconst must hold a single operand, got %d",
+					           int(op->operands.size()));
+					auto a = pop();
+					stack.emplace_back(transform(a, [&](auto &value) {
+						return value + op->operands[0];
+					}));
+					break;
+				}
+				case OpenCLDebugInfo100BitPiece:
+				{
+					// Describes an object or value which may be contained in
+					// part of a register or stored in more than one location.
+					// The first operand is offset in bit from the location
+					// defined by the preceding operation. The second operand is
+					// size of the piece in bits. The operands must be a single
+					// word integer literals.
+					ASSERT_MSG(op->operands.size() == 2,
+					           "BitPiece must hold two operands, got %d",
+					           int(op->operands.size()));
+					auto offset = op->operands[0];
+					auto size = op->operands[1];
+					stack.emplace_back(transform(pop(), [&](auto &value) {
+						return (value >> sw::SIMD::Int(offset)) & sw::SIMD::Int((1 << (size + 1)) - 1);
+					}));
+					break;
+				}
+				case OpenCLDebugInfo100Swap:
+				{
+					// Swaps the top two stack values.
+					auto a = pop();
+					auto b = pop();
+					stack.emplace_back(a);
+					stack.emplace_back(b);
+					break;
+				}
+				case OpenCLDebugInfo100Xderef:
+				{
+					// Pops the top two entries from the stack. Treats the
+					// former top entry as an address and the former second to
+					// top entry as an address space. The value retrieved from
+					// the address in the given address space is pushed.
+					UNIMPLEMENTED("b/148401179 OpenCLDebugInfo100 expression opcode OpenCLDebugInfo100Xderef");
+					break;
+				}
+				case OpenCLDebugInfo100StackValue:
+				{
+					// Describes an object which doesn’t exist in memory but
+					// it's value is known and is at the top of the DWARF
+					// expression stack.
+					UNIMPLEMENTED("b/148401179 OpenCLDebugInfo100 expression opcode OpenCLDebugInfo100StackValue");
+					break;
+				}
+				case OpenCLDebugInfo100Constu:
+				{
+					// Pushes a constant value onto the stack. The value operand
+					// must be a single word integer literal.
+					ASSERT_MSG(op->operands.size() == 1,
+					           "Constu must hold a single operand, got %d",
+					           int(op->operands.size()));
+					Values values{ sw::SIMD::Int(static_cast<int>(op->operands[0])) };
+					stack.emplace_back(values);
+					break;
+				}
+				default:
+					UNIMPLEMENTED("b/148401179 OpenCLDebugInfo100 expression opcode %d", int(op->opcode));
+			}
+		}
+
+		return pop();
+	}
 };
 
 struct Declare : ObjectImpl<Declare, Object, Object::Kind::Declare>
@@ -1540,18 +1692,64 @@ void SpirvShader::Impl::Debugger::process(const SpirvShader *shader, const InsnI
 
 				// Now copy the updated value into shadow memory representation
 				// of the variable.
-				// TODO(b/148401179): This assumes tight packing of all
-				// components, which may not match with the debug structure
-				// layout.
 				auto &valObject = shader->getObject(value->value);
-				auto &valType = shader->getType(valObject);
-				for(auto i = 0u; i < valType.componentCount; i++)
+				auto mask = state->activeLaneMask();
+				debug::Expression::Values evaluated;
+				switch(valObject.kind)
 				{
-					auto val = Operand(shader, state, value->value).Int(i);
-					auto dst = base + i * sizeof(uint32_t) * SIMD::Width;
-					// Use RobustBufferAccess as the size as described by the
-					// debug type may be smaller than the true SSA size.
-					dst.Store(val, sw::OutOfBoundsBehavior::RobustBufferAccess, state->activeLaneMask());
+					case Object::Kind::Constant:
+					case Object::Kind::Intermediate:
+					{
+						auto &valType = shader->getType(valObject.typeId());
+						debug::Expression::Values values;
+						values.reserve(valType.componentCount);
+						for(auto i = 0u; i < valType.componentCount; i++)
+						{
+							values.emplace_back(Operand(shader, state, value->value).Int(i));
+						}
+						evaluated = value->expression->evaluate(values, [&](rr::RValue<sw::SIMD::Int> offsets) {
+							DABORT("Cannot evaluate dref on constant or intermediate type");
+							return debug::Expression::Values{};
+						});
+						break;
+					}
+					case Object::Kind::Pointer:
+					case Object::Kind::InterfaceVariable:
+					{
+						auto &ptrTy = shader->getType(valObject.typeId());
+						auto &elType = shader->getType(ptrTy.element);
+						auto srcBase = state->getPointer(value->value);
+						auto interleaved = IsStorageInterleavedByLane(ptrTy.storageClass);
+						if(interleaved)
+						{
+							srcBase = InterleaveByLane(srcBase);
+						}
+						evaluated = value->expression->evaluate({ srcBase.offsets() }, [&](rr::RValue<sw::SIMD::Int> offset) {
+							sw::SIMD::Pointer src(srcBase.base, srcBase.limit(), offset);
+							debug::Expression::Values out;
+							out.reserve(elType.componentCount);
+							for(auto i = 0u; i < elType.componentCount; i++)
+							{
+								auto componentPtr = src + i * sizeof(uint32_t) * (interleaved ? SIMD::Width : 1);
+								auto component = componentPtr.Load<sw::SIMD::Int>(sw::OutOfBoundsBehavior::RobustBufferAccess, mask);
+								out.emplace_back(component);
+							}
+							return out;
+						});
+						break;
+					}
+					default:
+					{
+						UNIMPLEMENTED("b/148401179 OpenCLDebugInfo100 DebugValue with value of kind %d", int(valObject.kind));
+						break;
+					}
+				}
+
+				auto dst = base;
+				for(auto &val : evaluated)
+				{
+					dst.Store(val, sw::OutOfBoundsBehavior::RobustBufferAccess, mask);
+					dst += sizeof(uint32_t) * SIMD::Width;
 				}
 			});
 			break;
