@@ -113,6 +113,14 @@ std::shared_ptr<sw::SpirvShader> createShader(
 	auto code = dbgctx ? key.getInsns() : preprocessSpirv(key.getInsns(), key.getSpecializationInfo(), optimize);
 	ASSERT(code.size() > 0);
 
+	{
+		spvtools::SpirvTools core(SPV_ENV_VULKAN_1_1);
+		std::string ops;
+		core.Disassemble(code, &ops, SPV_BINARY_TO_TEXT_OPTION_NONE);
+		std::cout << "****************" << std::endl
+		          << ops << std::endl;
+	}
+
 	// If the pipeline has specialization constants, assume they're unique and
 	// use a new serial ID so the shader gets recompiled.
 	uint32_t codeSerialID = (key.getSpecializationInfo() ? vk::ShaderModule::nextSerialID() : module->getSerialID());
